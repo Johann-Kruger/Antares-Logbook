@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Release signing key and passwords (see BUILD_INSTRUCTIONS.md)
+*.jks
+*.keystore
+keystore.properties
+
+# Android build output
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/captures/
+android/.cxx/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# IDE project metadata (machine-specific, not part of the project)
+.idea/
+.vscode/
+*.iml
+
+# Claude Code personal settings
+.claude/settings.local.json
+
+# Python test caches
+__pycache__/
