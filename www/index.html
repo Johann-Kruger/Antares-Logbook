@@ -589,18 +589,46 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
   var SEA = ["Calm","Slight","Moderate","Rough"];
   var BAIT = [{code:"",label:"None"},{code:"L",label:"Live"},{code:"F",label:"Frozen"}];
   var TANKS = ["1","2","3","4","5","6"];
-  var SPECIES = { ALB:"Albacore", YFT:"Yellowfin" };
+  // Species the DFFE form has a column for. ALB and YFT are stored as
+  // stop.alb / stop.yft (the original fields); every other species goes in
+  // stop.other[code]. Species the skipper adds are saved in state.customSpecies
+  // and use the form's four spare columns (AE-AH).
+  var BUILTIN_SPECIES = [
+    { code:"ALB", name:"Longfin", short:"LF", col:"P" },
+    { code:"YFT", name:"Yellowfin", short:"YFT", col:"S" },
+    { code:"BET", name:"Bigeye", short:"BE", col:"V" },
+    { code:"BFT", name:"Bluefin", short:"BFT", col:"Y" },
+    { code:"YTL", name:"Yellowtail", short:"YT", col:"AB" },
+    { code:"SNK", name:"Snoek", short:"SNK", col:"AC" },
+    { code:"SKJ", name:"Skipjack", short:"SKJ", col:"AD" }
+  ];
+  var SPARE_COLS = ["AE","AF","AG","AH"];
 
   function defaultSettings(){ return {
     vessel:"ANTARES", registrationNo:"HTB278", rightsHolder:"Southwest Tuna Fishing Cc",
     rightNo:"TPL21222", permitNo:"2602382", skipper:"Johann Kruger", contact:"083 204 4880",
     email:"johannkruger1@gmail.com", port:"Hout Bay", observer:"N",
-    defaultCrew:"10", defaultHours:"13", gear:"P", liveBait:"N", baitCondition:"", polePct:"100"
+    defaultCrew:"10", defaultHours:"13", gear:"P", liveBait:"N", baitCondition:"", polePct:"100",
+    stopSpecies:"ALB,YFT,BET"
   }; }
   var SETTINGS_TEXT = Object.keys(defaultSettings());
   var TRIP_TEXT = ["tripNumber","sailDate","sailTime","dischargeDate","notes"];
   var STOP_TEXT = ["date","time","lat","lon","gpsNote","alb","yft","tank","sst","windDir","windKn","sea","driftDir","driftKn","schoolDepth","bait","notes"];
-  var DAY_TEXT = ["crew","hours","gear","liveBait","baitCondition","polePct","sst"];
+  var DAY_TEXT = ["crew","hours","gear","liveBait","baitCondition","polePct","sst","wxTime","wxWindDir","wxWindKn","wxSea","wxSwell","wxSky","wxNote"];
+  var SKY = ["Clear","Cloudy","Rain","Fog"];
+  // The vessel's HACCP books (Zip Print forms 0322 / 0323).
+  var SAN_OPS = ["Ablution facilities clean","Mess area clean","Galley clean and tidy","Cabins clean and tidy","Fishing deck clean","Fishing gear clean","Knives and saws clean","Holds clean","Processing deck clean","Ice clean","Staff fit and healthy","Staff correctly attired/no jewellery present","Staff hand-washing correct"];
+  var SAN_STORE = ["Fishing gear clean and stowed","Mutton cloth dry and stored","Fuel and oil separate, no spillage","Chemicals and cleaning stored","Galley food fresh and stowed","Durables in sealed containers, no rust"];
+  // Fresh fish inspection columns. yn = a Yes/No question with the expected answer.
+  var FISH_FIELDS = [
+    { k:"catchTime", label:"Date & time of catch" }, { k:"waterTemp", label:"Water temp °C" },
+    { k:"icing", label:"Icing correct?", yn:"Y" }, { k:"haulToIce", label:"Time from haul to ice" },
+    { k:"tPrior", label:"Temp prior to icing °C" }, { k:"t6", label:"Temp after 6 h °C" }, { k:"t12", label:"Temp after 12 h °C" },
+    { k:"t16", label:"Temp after 16 h °C" }, { k:"tOff", label:"Offloading temp °C" },
+    { k:"decomposed", label:"Decomposed?", yn:"N" }, { k:"poisonous", label:"Poisonous?", yn:"N" }, { k:"tainted", label:"Tainted?", yn:"N" },
+    { k:"foreign", label:"Foreign matter?", yn:"N" }, { k:"parasites", label:"Parasites?", yn:"N" },
+    { k:"gutting", label:"Gutting?", yn:"N" }, { k:"washing", label:"Washing?", yn:"Y" }, { k:"offal", label:"Offal discharge hygienic?", yn:"Y" }
+  ];
   var CREW_TEXT = ["name","surname","idNumber","role"];
   var CONDITION_FIELDS = ["sst","windDir","windKn","sea","driftDir","driftKn","schoolDepth","bait"];
 
@@ -647,7 +675,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
   var storageLocked = false;
   var loadProblem = null;
   function emptyState(){
-    return { schemaVersion:SCHEMA_VERSION, settings:defaultSettings(), trips:[], knownCrew:[], lastConditions:{}, backupAt:"" };
+    return { schemaVersion:SCHEMA_VERSION, settings:defaultSettings(), trips:[], knownCrew:[], customSpecies:[], lastConditions:{}, backupAt:"" };
   }
   function textFields(obj, keys){ keys.forEach(function(k){ if(obj[k]==null) obj[k]=""; else if(typeof obj[k]!=="string") obj[k]=String(obj[k]); }); return obj; }
   function normaliseState(s){
@@ -657,6 +685,8 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     textFields(out.settings, SETTINGS_TEXT);
     out.knownCrew = (Array.isArray(s.knownCrew) ? s.knownCrew : []).filter(isPlainObject).map(function(c){ return textFields(Object.assign({}, c), CREW_TEXT); });
     out.lastConditions = isPlainObject(s.lastConditions) ? s.lastConditions : {};
+    out.customSpecies = (Array.isArray(s.customSpecies) ? s.customSpecies : []).filter(function(c){ return isPlainObject(c) && c.code && c.name; })
+      .map(function(c){ return { code:String(c.code).toUpperCase().slice(0,6), name:String(c.name).slice(0,30) }; });
     out.backupAt = typeof s.backupAt === "string" ? s.backupAt : "";
     out.trips = (Array.isArray(s.trips) ? s.trips : []).filter(isPlainObject).map(function(t){
       var trip = textFields(Object.assign({}, t), TRIP_TEXT);
@@ -664,12 +694,29 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
       trip.ended = !!trip.ended;
       trip.createdAt = typeof trip.createdAt === "number" ? trip.createdAt : Date.now();
       trip.crew = (Array.isArray(t.crew) ? t.crew : []).filter(isPlainObject).map(function(c){ var x = textFields(Object.assign({}, c), CREW_TEXT); if(!x.id) x.id = uid(); return x; });
-      trip.stops = (Array.isArray(t.stops) ? t.stops : []).filter(isPlainObject).map(function(p){ var x = textFields(Object.assign({}, p), STOP_TEXT); if(!x.id) x.id = uid(); return x; });
+      trip.stops = (Array.isArray(t.stops) ? t.stops : []).filter(isPlainObject).map(function(p){
+        var x = textFields(Object.assign({}, p), STOP_TEXT); if(!x.id) x.id = uid();
+        var other = {};
+        if(isPlainObject(p.other)) Object.keys(p.other).forEach(function(k){ if(int(p.other[k])>0) other[k] = String(int(p.other[k])); });
+        x.other = other;
+        return x;
+      });
+      trip.crewConfirmedAt = typeof t.crewConfirmedAt === "string" ? t.crewConfirmedAt : "";
+      trip.haccp = {};
+      if(isPlainObject(t.haccp)) Object.keys(t.haccp).forEach(function(d){ var h = normaliseHaccp(t.haccp[d]); if(h) trip.haccp[d] = h; });
+      trip.skipperSig = typeof t.skipperSig === "string" && /^data:image\/png;base64,/.test(t.skipperSig) ? t.skipperSig : "";
       trip.days = {};
       if(isPlainObject(t.days)) Object.keys(t.days).forEach(function(k){ if(isPlainObject(t.days[k])) trip.days[k] = textFields(Object.assign({}, t.days[k]), DAY_TEXT); });
-      trip.weights = (Array.isArray(t.weights) ? t.weights : []).filter(isPlainObject).map(function(w){ var x = textFields(Object.assign({}, w), ["sp","kg","len"]); if(!x.id) x.id = uid(); if(x.sp!=="YFT") x.sp = "ALB"; return x; });
+      trip.weights = (Array.isArray(t.weights) ? t.weights : []).filter(isPlainObject).map(function(w){ var x = textFields(Object.assign({}, w), ["sp","kg","len"]); if(!x.id) x.id = uid(); if(!/^[A-Z]{2,6}$/.test(x.sp)) x.sp = "ALB"; return x; });
       return trip;
     });
+    return out;
+  }
+  function normaliseHaccp(h){
+    if(!isPlainObject(h)) return null;
+    var out = { san:{}, dailyTemp: String(h.dailyTemp==null?"":h.dailyTemp), inspectedBy: String(h.inspectedBy==null?"":h.inspectedBy), doneAt: String(h.doneAt==null?"":h.doneAt), fish:[] };
+    if(isPlainObject(h.san)) Object.keys(h.san).forEach(function(k){ if(h.san[k]==="Y" || h.san[k]==="N") out.san[k] = h.san[k]; });
+    out.fish = (Array.isArray(h.fish) ? h.fish : []).filter(isPlainObject).map(function(f){ return textFields(Object.assign({}, f), FISH_FIELDS.map(function(x){ return x.k; }).concat(["sp"])); });
     return out;
   }
   function keepCopyOf(raw, tag){
@@ -713,7 +760,24 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
   }
   function stopsOn(trip, date){ return sortedStops(trip).filter(function(s){ return s.date===date; }); }
   function sumOf(list, f){ return list.reduce(function(a,s){ return a + int(s[f]); }, 0); }
-  function tripTotals(trip){ return { alb:sumOf(trip.stops,"alb"), yft:sumOf(trip.stops,"yft"), stops:trip.stops.length, days:tripDates(trip).length }; }
+  function allSpecies(){ return BUILTIN_SPECIES.concat(state.customSpecies.map(function(c){ return { code:c.code, name:c.name, short:c.code, custom:true }; })); }
+  function speciesOf(code){ return allSpecies().find(function(x){ return x.code===code; }) || { code:code, name:code, short:code }; }
+  function countOf(stop, code){ return code==="ALB" ? int(stop.alb) : code==="YFT" ? int(stop.yft) : int(stop.other && stop.other[code]); }
+  function sumSp(list, code){ return list.reduce(function(a,s){ return a + countOf(s, code); }, 0); }
+  // Species with any fish or weights on this trip, in form order.
+  function speciesInTrip(trip){
+    return allSpecies().filter(function(sp){ return sumSp(trip.stops, sp.code)>0 || trip.weights.some(function(w){ return w.sp===sp.code; }); });
+  }
+  function stopSpeciesCodes(){
+    var codes = String(state.settings.stopSpecies||"").split(",").map(function(x){ return x.trim(); }).filter(Boolean);
+    if(codes.indexOf("ALB")<0) codes.unshift("ALB");
+    return codes.filter(function(c){ return allSpecies().some(function(x){ return x.code===c; }); });
+  }
+  function otherTotal(list){ return list.reduce(function(a,s){ return a + Object.keys(s.other||{}).reduce(function(b,k){ return b+int(s.other[k]); },0); }, 0); }
+  function tripTotals(trip){ return { alb:sumOf(trip.stops,"alb"), yft:sumOf(trip.stops,"yft"), other:otherTotal(trip.stops), stops:trip.stops.length, days:tripDates(trip).length }; }
+  function extrasText(stop){
+    return Object.keys(stop.other||{}).filter(function(k){ return int(stop.other[k])>0; }).map(function(k){ return "+"+int(stop.other[k])+" "+speciesOf(k).short; });
+  }
   function weightStats(trip, sp){
     var list = trip.weights.filter(function(w){ return w.sp===sp && num(w.kg)>0; });
     var total = list.reduce(function(a,w){ return a+num(w.kg); }, 0);
@@ -921,7 +985,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
       html += '<div class="lineitem" data-trip="'+t.id+'"><div class="num">'+esc(t.tripNumber||"–")+'</div><div class="meta">'+
         '<div class="t1">'+esc(tripLabel(t))+' '+(t.ended?'':'<span class="tag open">AT SEA</span>')+'</div>'+
         '<div class="t2">'+esc(tripRange(t))+' · '+tot.stops+' stops</div>'+
-        '<div class="t2"><b style="color:var(--kelp)">'+tot.alb+' ALB</b>'+(tot.yft?' · <b style="color:var(--yellow)">'+tot.yft+' YFT</b>':'')+'</div>'+
+        '<div class="t2"><b style="color:var(--kelp)">'+tot.alb+' LF</b>'+(tot.yft?' · <b style="color:var(--yellow)">'+tot.yft+' YFT</b>':'')+(tot.other?' · '+tot.other+' other':'')+'</div>'+
         '</div><div class="chev">›</div></div>';
     });
     html += '<div class="card" style="margin-top:16px;"><div class="row-between"><div class="helptext" style="margin:0;">'+esc(backupStatusText())+'</div><button class="btn btn-ghost btn-sm" id="btnBackupNow">Back up</button></div></div>';
@@ -947,26 +1011,27 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
       '<h2>'+(isNew?"New trip":"Trip details")+'</h2>'+
       '<div class="grid2">'+field("Trip number (DFFE)", "tTripNo", t.tripNumber, "text", 'inputmode="numeric"')+field("Discharge date", "tDis", t.dischargeDate, "date")+'</div>'+
       '<div class="grid2">'+field("Sailing date", "tSail", t.sailDate, "date")+field("Sailing time", "tSailTime", t.sailTime, "time")+'</div>'+
-      (isNew && last && last.crew.length ? '<label class="chip on" id="copyCrew" style="margin:6px 0 4px;">✓ Same crew as '+esc(tripLabel(last))+' ('+last.crew.length+')</label>' : '')+
+      (isNew && last && last.crew.length ? '<p class="helptext">The crew list from '+esc(tripLabel(last))+' ('+last.crew.length+') is brought over for you to check and confirm.</p>' : '')+
       '<div class="field"><label for="tNotes">Notes</label><textarea id="tNotes">'+esc(t.notes)+'</textarea></div>'+
       '<div class="sheet-foot"><button class="btn btn-outline" data-a="cancel">Cancel</button><button class="btn btn-accent" data-a="save">'+(isNew?"Start trip":"Save")+'</button></div>'
     );
-    var copy = s.sheet.querySelector("#copyCrew");
-    if(copy) copy.onclick = function(){ copy.classList.toggle("on"); copy.textContent = (copy.classList.contains("on")?"✓ ":"")+"Same crew as "+tripLabel(last)+" ("+last.crew.length+")"; };
     s.sheet.querySelector('[data-a="cancel"]').onclick = s.close;
     s.sheet.querySelector('[data-a="save"]').onclick = function(){
       var no = val(s.sheet,"tTripNo");
       var clash = state.trips.find(function(x){ return x!==trip && no && x.tripNumber===no; });
       if(clash){ showToast("Trip "+no+" already exists", true); return; }
       if(isNew){
-        trip = { id:uid(), createdAt:Date.now(), ended:false, crew:[], stops:[], days:{}, weights:[] };
-        if(copy && copy.classList.contains("on")) trip.crew = last.crew.map(function(c){ return Object.assign({}, c, { id:uid() }); });
+        trip = { id:uid(), createdAt:Date.now(), ended:false, crew:[], stops:[], days:{}, weights:[], haccp:{}, skipperSig:"", crewConfirmedAt:"" };
+        if(last && last.crew.length) trip.crew = last.crew.map(function(c){ return Object.assign({}, c, { id:uid() }); });
         state.trips.push(trip);
       }
       trip.tripNumber = no; trip.sailDate = val(s.sheet,"tSail"); trip.sailTime = val(s.sheet,"tSailTime");
       trip.dischargeDate = val(s.sheet,"tDis"); trip.notes = val(s.sheet,"tNotes");
       saveState(); s.close();
-      if(isNew) go("trip", trip.id); else render();
+      if(!isNew){ render(); return; }
+      // Start of trip: skipper signs once, then checks the crew list.
+      view.tripId = trip.id;
+      captureSkipperSig(trip, function(){ go("crew", trip.id); });
     };
   }
 
@@ -983,10 +1048,12 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     }
     html += '<div class="card"><div class="totals">'+
       (trip.ended ? '' : '<div><div class="n">'+sumOf(todays,"alb")+'</div><div class="l">today</div></div>')+
-      '<div><div class="n">'+tot.alb+'</div><div class="l">ALB trip</div></div>'+
+      '<div><div class="n">'+tot.alb+'</div><div class="l">LF trip</div></div>'+
       '<div><div class="n yf">'+tot.yft+'</div><div class="l">YFT trip</div></div>'+
       '<div><div class="n" style="color:var(--text)">'+tot.stops+'</div><div class="l">stops</div></div>'+
       '</div></div>';
+    if(!trip.ended && trip.crew.length && !trip.crewConfirmedAt) html += '<div class="locked-note"><span>Crew list not confirmed yet.</span><button class="btn btn-sm" id="btnGoCrew">Check</button></div>';
+    if(!trip.ended && !trip.skipperSig) html += '<div class="locked-note"><span>No skipper signature for this trip.</span><button class="btn btn-sm" id="btnSign">Sign</button></div>';
     html += '<div class="actions">'+
       '<button class="btn btn-ghost" id="btnCrew">👥 Crew ('+trip.crew.length+')</button>'+
       '<button class="btn btn-ghost" id="btnWeights">⚖ Weights ('+trip.weights.length+')</button>'+
@@ -1003,8 +1070,11 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     dates.forEach(function(d){
       var list = stopsOn(trip, d);
       var info = dayInfo(trip, d);
-      html += '<div class="dayhead"><div><div class="d">'+esc(fmtDay(d))+'</div><div class="s">'+list.length+' stops · '+sumOf(list,"alb")+' ALB'+(sumOf(list,"yft")?' · '+sumOf(list,"yft")+' YFT':'')+(info.sst?' · SST '+esc(info.sst):'')+'</div></div>'+
-        '<button class="btn btn-ghost btn-sm" data-day="'+d+'">Day details</button></div>';
+      var hdone = trip.haccp[d] && trip.haccp[d].doneAt;
+      html += '<div class="dayhead"><div><div class="d">'+esc(fmtDay(d))+'</div><div class="s">'+list.length+' stops · '+sumOf(list,"alb")+' LF'+(sumOf(list,"yft")?' · '+sumOf(list,"yft")+' YFT':'')+(otherTotal(list)?' · '+otherTotal(list)+' other':'')+(info.sst?' · SST '+esc(info.sst):'')+'</div>'+
+        (hasWeather(trip,d)?'<div class="s">🌬 '+esc(weatherText(trip.days[d])||trip.days[d].wxNote)+'</div>':'')+'</div>'+
+        '<button class="btn btn-ghost btn-sm" data-day="'+d+'">Day ▾</button></div>'+
+        (list.length ? '<button class="btn '+(hdone?'btn-ghost':'btn-outline')+' btn-sm" data-haccp="'+d+'" style="width:100%;margin-bottom:8px;'+(hdone?'':'border-color:var(--yellow);color:var(--yellow);')+'">'+(hdone?'✓ End-of-day HACCP done':'End-of-day HACCP check')+'</button>' : '');
       var dayAcc = 0;
       list.forEach(function(s){
         dayAcc += int(s.alb);
@@ -1016,7 +1086,8 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
         if(s.tank) cond.push("tank "+s.tank);
         html += '<div class="stoprow" data-stop="'+s.id+'"><div class="tm">'+esc(s.time||"--:--")+'</div><div><div class="pos">'+esc(fmtPos(s.lat,s.lon))+'</div>'+
           (cond.length?'<div class="cond">'+esc(cond.join(" · "))+'</div>':'')+(s.notes?'<div class="cond">'+esc(s.notes)+'</div>':'')+
-          '</div><div class="fish"><div class="a">'+int(s.alb)+(int(s.yft)?' <span class="tag yf">+'+int(s.yft)+' YF</span>':'')+'</div><div class="r">'+dayAcc+' / '+running[s.id]+'</div></div></div>';
+          '</div><div class="fish"><div class="a">'+int(s.alb)+(int(s.yft)?' <span class="tag yf">+'+int(s.yft)+' YF</span>':'')+'</div>'+
+          (extrasText(s).length?'<div class="r">'+esc(extrasText(s).join(" "))+'</div>':'')+'<div class="r">'+dayAcc+' / '+running[s.id]+'</div></div></div>';
       });
     });
     el.innerHTML = html;
@@ -1031,7 +1102,10 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
       if(openTrip()){ showToast("End the trip that's at sea first", true); return; }
       showConfirm("Reopen "+tripLabel(trip)+" so it can be changed?", "Reopen", "btn-accent", function(){ trip.ended = false; saveState(); render(); });
     };
-    el.querySelectorAll("[data-day]").forEach(function(b){ b.onclick = function(){ openDaySheet(trip, b.getAttribute("data-day")); }; });
+    el.querySelectorAll("[data-day]").forEach(function(b){ b.onclick = function(){ openDayMenu(trip, b.getAttribute("data-day")); }; });
+    el.querySelectorAll("[data-haccp]").forEach(function(b){ b.onclick = function(){ openHaccpSheet(trip, b.getAttribute("data-haccp")); }; });
+    var gc = document.getElementById("btnGoCrew"); if(gc) gc.onclick = function(){ go("crew"); };
+    var sg = document.getElementById("btnSign"); if(sg) sg.onclick = function(){ captureSkipperSig(trip); };
     el.querySelectorAll("[data-stop]").forEach(function(r){ r.onclick = function(){ openStopSheet(trip, trip.stops.find(function(s){ return s.id===r.getAttribute("data-stop"); })); }; });
     if(!trip.ended){
       var fab = document.getElementById("fab");
@@ -1050,25 +1124,39 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
   function openStopSheet(trip, stop){
     if(lockedGuard(trip)) return;
     var isNew = !stop;
+    // Weather is captured at the start of each day and then used for every
+    // stop until it's changed, so ask for it before the day's first stop.
+    if(isNew && !hasWeather(trip, todayISO())){
+      openWeatherSheet(trip, todayISO(), function(){ openStopSheet(trip, null); });
+      return;
+    }
     var lastStop = sortedStops(trip).slice(-1)[0];
     var lc = state.lastConditions || {};
     var s0 = stop ? Object.assign({}, stop) : {
-      date: todayISO(), time: nowHM(), lat:"", lon:"", gpsNote:"", alb:"", yft:"",
+      date: todayISO(), time: nowHM(), lat:"", lon:"", gpsNote:"", alb:"", yft:"", other:{},
       tank: lastStop ? lastStop.tank : "",
       sst: lc.sst||"", windDir: lc.windDir||"", windKn: lc.windKn||"", sea: lc.sea||"", driftDir: lc.driftDir||"", driftKn: lc.driftKn||"",
       schoolDepth:"", bait: lc.bait||"", notes:""
     };
     var dirty = false;
+    var shown = stopSpeciesCodes().filter(function(c){ return c!=="ALB"; });
+    Object.keys(s0.other||{}).forEach(function(k){ if(shown.indexOf(k)<0) shown.push(k); });
+    if(int(s0.yft) && shown.indexOf("YFT")<0) shown.unshift("YFT");
+    function smallCounter(code){
+      var sp = speciesOf(code);
+      return '<div class="sectionlabel">'+esc(sp.name)+' ('+esc(sp.short)+')</div>'+
+        '<div class="counter small"><button data-step="'+code+':-1">−</button><input data-sp="'+code+'" type="number" inputmode="numeric" min="0" value="'+esc(countOf(s0, code)||"")+'" placeholder="0"><button data-step="'+code+':1">+</button></div>';
+    }
     var html =
       '<h2>'+(isNew?"New stop":"Stop "+esc(s0.time))+'</h2>'+
       '<div class="gpsbox" id="gpsBox"><div class="p" id="gpsText"></div><button class="btn btn-ghost btn-sm" id="btnGps">GPS</button></div>'+
-      '<div class="sectionlabel">Albacore (longfin)</div>'+
-      '<div class="counter"><button data-step="alb:-1">−</button><input id="sAlb" type="number" inputmode="numeric" min="0" value="'+esc(s0.alb)+'" placeholder="0"><button data-step="alb:1">+</button></div>'+
-      '<div class="quick"><button data-step="alb:5">+5</button><button data-step="alb:10">+10</button><button data-step="alb:20">+20</button><button data-step="alb:50">+50</button></div>'+
-      '<div class="sectionlabel">Yellowfin</div>'+
-      '<div class="counter small"><button data-step="yft:-1">−</button><input id="sYft" type="number" inputmode="numeric" min="0" value="'+esc(s0.yft)+'" placeholder="0"><button data-step="yft:1">+</button></div>'+
+      '<div class="sectionlabel">Longfin (LF)</div>'+
+      '<div class="counter"><button data-step="ALB:-1">−</button><input id="sAlb" data-sp="ALB" type="number" inputmode="numeric" min="0" value="'+esc(s0.alb)+'" placeholder="0"><button data-step="ALB:1">+</button></div>'+
+      '<div class="quick"><button data-step="ALB:5">+5</button><button data-step="ALB:10">+10</button><button data-step="ALB:20">+20</button><button data-step="ALB:50">+50</button></div>'+
+      '<div id="spCounters">'+shown.map(smallCounter).join("")+'</div>'+
+      '<button class="btn btn-ghost" id="btnOtherSp" style="margin-top:10px;">+ Other species</button>'+
       '<div class="sectionlabel">Tank</div>'+chips("tank", TANKS, s0.tank, "sq")+
-      '<details class="more"'+(isNew?'':' open')+'><summary>Conditions (kept from the last stop)</summary>'+
+      '<details class="more"'+(isNew?'':' open')+'><summary>Conditions (kept until you change them)</summary>'+
         '<div class="grid2">'+field("SST °C", "sSst", s0.sst, "text", 'inputmode="decimal"')+field("School depth (m)", "sDepth", s0.schoolDepth, "text", 'inputmode="numeric"')+'</div>'+
         '<div class="sectionlabel">Wind direction</div>'+chips("windDir", DIRECTIONS, s0.windDir, "sq")+
         '<div class="sectionlabel">Wind (knots)</div>'+chips("windKn", WIND_KN, s0.windKn)+
@@ -1112,20 +1200,27 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     }
     if(isNew) getFix(); else showGps();
     root.querySelector("#btnGps").onclick = getFix;
-    root.querySelectorAll("[data-step]").forEach(function(b){
-      b.onclick = function(){
-        var p = b.getAttribute("data-step").split(":");
-        var input = root.querySelector(p[0]==="alb" ? "#sAlb" : "#sYft");
-        input.value = String(Math.max(0, int(input.value) + int(p[1])));
-        dirty = true;
-      };
+    root.addEventListener("click", function(e){
+      var b = e.target.closest("[data-step]"); if(!b) return;
+      var p = b.getAttribute("data-step").split(":");
+      var input = root.querySelector('input[data-sp="'+p[0]+'"]');
+      input.value = String(Math.max(0, int(input.value) + int(p[1])));
+      dirty = true;
     });
+    root.querySelector("#btnOtherSp").onclick = function(){
+      pickSpecies(shown.concat(["ALB"]), function(code){
+        shown.push(code);
+        var wrap = document.createElement("div"); wrap.innerHTML = smallCounter(code);
+        while(wrap.firstChild) root.querySelector("#spCounters").appendChild(wrap.firstChild);
+        var inp = root.querySelector('input[data-sp="'+code+'"]'); inp.value = "1"; dirty = true;
+      });
+    };
     root.addEventListener("input", function(){ dirty = true; });
     wireChips(root, function(){ dirty = true; });
     root.querySelector('[data-a="cancel"]').onclick = function(){ tryClose(sh.entry); };
     var del = root.querySelector("#btnDelStop");
     if(del) del.onclick = function(){
-      showConfirm("Delete the "+s0.time+" stop ("+int(s0.alb)+" ALB)?", "Delete", "btn-danger", function(){
+      showConfirm("Delete the "+s0.time+" stop ("+int(s0.alb)+" LF)?", "Delete", "btn-danger", function(){
         trip.stops = trip.stops.filter(function(x){ return x.id!==stop.id; });
         saveState(); sh.close(); render(); showToast("Stop deleted");
       });
@@ -1140,7 +1235,11 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
       var rec = stop || { id:uid() };
       rec.date = val(root,"sDate") || todayISO(); rec.time = val(root,"sTime") || nowHM();
       rec.lat = lat; rec.lon = lon; rec.gpsNote = gpsNote;
-      rec.alb = String(int(val(root,"sAlb"))); rec.yft = String(int(val(root,"sYft")));
+      rec.alb = "0"; rec.yft = "0"; rec.other = {};
+      root.querySelectorAll("input[data-sp]").forEach(function(inp){
+        var code = inp.getAttribute("data-sp"), n = Math.max(0, int(inp.value));
+        if(code==="ALB") rec.alb = String(n); else if(code==="YFT") rec.yft = String(n); else if(n) rec.other[code] = String(n);
+      });
       rec.tank = chipValue(root,"tank");
       rec.sst = val(root,"sSst"); rec.schoolDepth = val(root,"sDepth"); rec.driftKn = val(root,"sDriftKn");
       rec.windDir = chipValue(root,"windDir"); rec.windKn = chipValue(root,"windKn"); rec.sea = chipValue(root,"sea");
@@ -1148,10 +1247,125 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
       textFields(rec, STOP_TEXT);
       if(!stop) trip.stops.push(rec);
       state.lastConditions = {}; CONDITION_FIELDS.forEach(function(k){ if(k!=="schoolDepth") state.lastConditions[k] = rec[k]; });
+      state.lastConditions.date = rec.date;
       saveState(); sh.close(); render();
       var tot = tripTotals(trip);
-      showToast("Saved · "+rec.alb+" ALB · day "+sumOf(stopsOn(trip, rec.date),"alb")+" · trip "+tot.alb);
+      showToast("Saved · "+rec.alb+" LF · day "+sumOf(stopsOn(trip, rec.date),"alb")+" · trip "+tot.alb);
     };
+  }
+
+  // ================= Species picker =================
+  // Lists every species not already on the stop, and lets the skipper add a
+  // new one, which is saved for every trip after this.
+  function pickSpecies(exclude, onPick){
+    var list = allSpecies().filter(function(sp){ return exclude.indexOf(sp.code)<0; });
+    var sh = openSheet('<h2>Other species</h2><div class="chiprow" id="spList">'+
+      list.map(function(sp){ return '<div class="chip" data-code="'+esc(sp.code)+'">'+esc(sp.name)+'</div>'; }).join("")+'</div>'+
+      '<div class="sectionlabel">New species</div><div class="grid2">'+field("Name", "nsName", "")+field("Code (2-6 letters)", "nsCode", "", "text", 'autocapitalize="characters" maxlength="6"')+'</div>'+
+      '<p class="helptext">New species are saved for later trips. The DFFE form has four spare columns for them.</p>'+
+      '<div class="sheet-foot"><button class="btn btn-outline" data-a="cancel">Cancel</button><button class="btn btn-accent" data-a="add">Add new species</button></div>');
+    sh.sheet.querySelector('[data-a="cancel"]').onclick = sh.close;
+    sh.sheet.querySelector("#spList").addEventListener("click", function(e){
+      var c = e.target.closest("[data-code]"); if(!c) return;
+      sh.close(); onPick(c.getAttribute("data-code"));
+    });
+    sh.sheet.querySelector('[data-a="add"]').onclick = function(){
+      var name = val(sh.sheet,"nsName"), code = val(sh.sheet,"nsCode").toUpperCase().replace(/[^A-Z]/g,"");
+      if(!name){ showToast("Type the species name", true); return; }
+      if(!code) code = name.toUpperCase().replace(/[^A-Z]/g,"").slice(0,3);
+      if(code.length<2){ showToast("Give it a code of 2-6 letters", true); return; }
+      if(allSpecies().some(function(x){ return x.code===code; })){ showToast(code+" is already used", true); return; }
+      state.customSpecies.push({ code:code, name:name });
+      saveState(); sh.close(); onPick(code);
+      showToast(name+" saved as a species");
+    };
+  }
+
+  // ================= Daily weather =================
+  function hasWeather(trip, date){ var d = trip.days[date]; return !!(d && (d.wxWindDir || d.wxWindKn || d.wxSea || d.wxSky || d.wxSwell || d.wxNote)); }
+  function lastWeather(trip, before){
+    var dates = Object.keys(trip.days).filter(function(d){ return d<before && hasWeather(trip, d); }).sort();
+    if(dates.length) return trip.days[dates[dates.length-1]];
+    var prev = state.trips.filter(function(t){ return t!==trip; }).sort(function(a,b){ return b.createdAt-a.createdAt; });
+    for(var i=0;i<prev.length;i++){ var ds = Object.keys(prev[i].days).filter(function(d){ return hasWeather(prev[i], d); }).sort(); if(ds.length) return prev[i].days[ds[ds.length-1]]; }
+    return {};
+  }
+  function weatherText(d){
+    if(!d) return "";
+    var bits = [];
+    if(d.wxWindDir || d.wxWindKn) bits.push(((d.wxWindDir||"")+" "+(d.wxWindKn?d.wxWindKn+" kn":"")).trim());
+    if(d.wxSea) bits.push(d.wxSea);
+    if(d.wxSwell) bits.push(d.wxSwell+" m swell");
+    if(d.wxSky) bits.push(d.wxSky);
+    return bits.join(" · ");
+  }
+  function openWeatherSheet(trip, date, after){
+    var d = hasWeather(trip, date) ? trip.days[date] : lastWeather(trip, date);
+    var first = !hasWeather(trip, date);
+    var sh = openSheet('<h2>Weather — '+esc(fmtDay(date))+'</h2>'+
+      (first ? '<p class="helptext" style="margin:0 0 8px;">Start of the day. Stops use this weather until you change it.</p>' : '')+
+      '<div class="sectionlabel">Wind direction</div>'+chips("wxWindDir", DIRECTIONS, d.wxWindDir||"", "sq")+
+      '<div class="sectionlabel">Wind (knots)</div>'+chips("wxWindKn", WIND_KN, d.wxWindKn||"")+
+      '<div class="sectionlabel">Sea</div>'+chips("wxSea", SEA, d.wxSea||"")+
+      '<div class="sectionlabel">Sky</div>'+chips("wxSky", SKY, d.wxSky||"")+
+      '<div class="grid2" style="margin-top:10px;">'+field("Swell (m)", "wxSwell", d.wxSwell||"", "text", 'inputmode="decimal"')+field("Time", "wxTime", first ? nowHM() : (d.wxTime||""), "time")+'</div>'+
+      field("Weather notes", "wxNote", first ? "" : (d.wxNote||""))+
+      '<div class="sheet-foot">'+(after?'<button class="btn btn-outline" data-a="skip">Skip</button>':'<button class="btn btn-outline" data-a="cancel">Cancel</button>')+'<button class="btn btn-accent" data-a="save">'+(after?"Save &amp; log stop":"Save")+'</button></div>');
+    var root = sh.sheet;
+    wireChips(root);
+    var c = root.querySelector('[data-a="cancel"]'); if(c) c.onclick = sh.close;
+    var sk = root.querySelector('[data-a="skip"]');
+    if(sk) sk.onclick = function(){
+      // Skipping still marks the day so the question isn't asked at every stop.
+      var day = trip.days[date] || textFields({}, DAY_TEXT); day.wxNote = day.wxNote || "not recorded"; trip.days[date] = textFields(day, DAY_TEXT);
+      saveState(); sh.close(); after();
+    };
+    root.querySelector('[data-a="save"]').onclick = function(){
+      var day = trip.days[date] || textFields({}, DAY_TEXT);
+      day.wxWindDir = chipValue(root,"wxWindDir"); day.wxWindKn = chipValue(root,"wxWindKn"); day.wxSea = chipValue(root,"wxSea");
+      day.wxSky = chipValue(root,"wxSky"); day.wxSwell = val(root,"wxSwell"); day.wxTime = val(root,"wxTime"); day.wxNote = val(root,"wxNote");
+      trip.days[date] = textFields(day, DAY_TEXT);
+      // The day's weather becomes the default for the stops that follow.
+      state.lastConditions = Object.assign({}, state.lastConditions, { windDir:day.wxWindDir, windKn:day.wxWindKn, sea:day.wxSea });
+      saveState(); sh.close();
+      if(after) after(); else render();
+    };
+  }
+
+  // ================= Signature pad =================
+  // Draw with a finger; saved as a small PNG so it can go on the PDFs.
+  function openSignatureSheet(title, note, onSave){
+    var sh = openSheet('<h2>'+esc(title)+'</h2>'+(note?'<p class="helptext" style="margin:0 0 8px;">'+esc(note)+'</p>':'')+
+      '<canvas id="sigPad" style="width:100%;height:200px;background:#fff;border-radius:12px;touch-action:none;display:block;"></canvas>'+
+      '<div class="sheet-foot"><button class="btn btn-outline" data-a="clear">Clear</button><button class="btn btn-outline" data-a="cancel">Cancel</button><button class="btn btn-accent" data-a="save">Save</button></div>');
+    var cv = sh.sheet.querySelector("#sigPad");
+    var ratio = 2, w = cv.clientWidth || 360, h = 200;
+    cv.width = w*ratio; cv.height = h*ratio;
+    var ctx = cv.getContext("2d");
+    ctx.scale(ratio, ratio); ctx.lineWidth = 2.6; ctx.lineCap = "round"; ctx.lineJoin = "round"; ctx.strokeStyle = "#0A2530";
+    var drawing = false, inked = false, last = null;
+    function pt(e){ var r = cv.getBoundingClientRect(); return { x:e.clientX-r.left, y:e.clientY-r.top }; }
+    cv.addEventListener("pointerdown", function(e){ drawing = true; last = pt(e); cv.setPointerCapture(e.pointerId); e.preventDefault(); });
+    cv.addEventListener("pointermove", function(e){
+      if(!drawing) return; var p = pt(e);
+      ctx.beginPath(); ctx.moveTo(last.x, last.y); ctx.lineTo(p.x, p.y); ctx.stroke(); last = p; inked = true; e.preventDefault();
+    });
+    ["pointerup","pointercancel","pointerleave"].forEach(function(ev){ cv.addEventListener(ev, function(){ drawing = false; }); });
+    sh.sheet.querySelector('[data-a="clear"]').onclick = function(){ ctx.clearRect(0,0,w,h); inked = false; };
+    sh.sheet.querySelector('[data-a="cancel"]').onclick = sh.close;
+    sh.sheet.querySelector('[data-a="save"]').onclick = function(){
+      if(!inked){ showToast("Sign in the white box first", true); return; }
+      // Downscale to keep the stored image small.
+      var out = document.createElement("canvas"); out.width = 600; out.height = Math.round(600*h/w);
+      out.getContext("2d").drawImage(cv, 0, 0, out.width, out.height);
+      var data = out.toDataURL("image/png");
+      sh.close(); onSave(data);
+    };
+  }
+  function captureSkipperSig(trip, after){
+    openSignatureSheet("Skipper signature", state.settings.skipper+" — signs the documents for "+tripLabel(trip)+".", function(data){
+      trip.skipperSig = data; saveState(); showToast("Signature saved"); if(after) after(); else render();
+    });
   }
 
   // ================= Day details (DFFE per-day fields) =================
@@ -1182,13 +1396,18 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
   // ================= Tanks =================
   function openTanksSheet(trip){
     var by = {};
-    trip.stops.forEach(function(s){ var k = s.tank || "—"; by[k] = by[k] || { alb:0, yft:0, stops:0 }; by[k].alb += int(s.alb); by[k].yft += int(s.yft); by[k].stops++; });
+    var sps = speciesInTrip(trip).filter(function(sp){ return sumSp(trip.stops, sp.code)>0; });
+    trip.stops.forEach(function(st){
+      var k = st.tank || "—"; by[k] = by[k] || { stops:0 };
+      by[k].stops++;
+      sps.forEach(function(sp){ by[k][sp.code] = (by[k][sp.code]||0) + countOf(st, sp.code); });
+    });
     var keys = Object.keys(by).sort();
     var html = '<h2>Fish by tank</h2>';
     if(!keys.length) html += '<p class="sheet-text">No stops yet.</p>';
-    else html += '<table class="tbl"><tr><th>Tank</th><th class="r">Stops</th><th class="r">ALB</th><th class="r">YFT</th></tr>'+
-      keys.map(function(k){ return '<tr><td><b>'+esc(k==="—"?"Not set":"Tank "+k)+'</b></td><td class="r">'+by[k].stops+'</td><td class="r"><b>'+by[k].alb+'</b></td><td class="r">'+by[k].yft+'</td></tr>'; }).join("")+'</table>'+
-      '<p class="helptext">Set the tank on each stop. A stop split over two tanks: put it on the tank that took most, and note the split.</p>';
+    else html += '<table class="tbl"><tr><th>Tank</th><th class="r">Stops</th>'+sps.map(function(sp){ return '<th class="r">'+esc(sp.short)+'</th>'; }).join("")+'</tr>'+
+      keys.map(function(k){ return '<tr><td><b>'+esc(k==="—"?"Not set":"Tank "+k)+'</b></td><td class="r">'+by[k].stops+'</td>'+sps.map(function(sp){ return '<td class="r"><b>'+(by[k][sp.code]||0)+'</b></td>'; }).join("")+'</tr>'; }).join("")+'</table>'+
+      '<p class="helptext">Each stop goes in the tank chosen on the last stop until you pick another. A stop split over two tanks: put it on the tank that took most, and note the split.</p>';
     html += '<div class="sheet-foot"><button class="btn btn-accent" data-a="ok">Close</button></div>';
     var sh = openSheet(html);
     sh.sheet.querySelector('[data-a="ok"]').onclick = sh.close;
@@ -1201,11 +1420,15 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     var warn = [];
     if(!trip.tripNumber) warn.push("No trip number yet");
     if(!trip.crew.length) warn.push("No crew list");
+    else if(!trip.crewConfirmedAt) warn.push("Crew list not confirmed");
+    if(!trip.skipperSig) warn.push("No skipper signature");
+    var noH = tripDates(trip).filter(function(d){ return stopsOn(trip,d).length && !(trip.haccp[d] && trip.haccp[d].doneAt); });
+    if(noH.length) warn.push("End-of-day HACCP not done for "+noH.map(fmtDay).join(", "));
     if(!trip.weights.length) warn.push("No offload weights yet (you can add them after ending)");
-    var noPos = trip.stops.filter(function(s){ return s.lat===""; }).length;
+    var noPos = trip.stops.filter(function(st){ return st.lat===""; }).length;
     if(noPos) warn.push(noPos+" stop(s) without a position");
     var html = '<h2>End '+esc(tripLabel(trip))+'</h2>'+
-      '<p class="sheet-text">'+tot.stops+' stops · '+tot.alb+' ALB · '+tot.yft+' YFT over '+tot.days+' days.</p>'+
+      '<p class="sheet-text">'+tot.stops+' stops · '+tot.alb+' LF · '+tot.yft+' YFT'+(tot.other?' · '+tot.other+' other':'')+' over '+tot.days+' days.</p>'+
       (warn.length ? '<div class="locked-note" style="display:block;">'+warn.map(esc).join("<br>")+'</div>' : '')+
       field("Discharge date", "eDis", trip.dischargeDate || todayISO(), "date")+
       '<div class="sheet-foot"><button class="btn btn-outline" data-a="cancel">Cancel</button><button class="btn btn-accent" data-a="ok">End trip</button></div>';
@@ -1214,8 +1437,240 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     sh.sheet.querySelector('[data-a="ok"]').onclick = function(){
       trip.dischargeDate = val(sh.sheet,"eDis"); trip.ended = true;
       saveState(); sh.close(); render();
-      showToast("Trip ended. Add the offload weights, then make the DFFE report.");
+      showToast("Trip ended. Add the offload weights, then make the reports.");
     };
+  }
+
+  // ================= Day menu and end-of-day HACCP =================
+  function openDayMenu(trip, date){
+    var sh = openSheet('<h2>'+esc(fmtDay(date))+'</h2><div class="sheet-actions">'+
+      '<button class="btn btn-ghost" data-a="wx">🌬 Weather'+(hasWeather(trip,date)?' — '+esc(weatherText(trip.days[date])||"set"):'')+'</button>'+
+      '<button class="btn btn-ghost" data-a="haccp">🧊 End-of-day HACCP check</button>'+
+      '<button class="btn btn-ghost" data-a="dffe">📋 DFFE day details (crew, hours, bait, SST)</button>'+
+      '<button class="btn btn-outline" data-a="close">Close</button></div>');
+    sh.sheet.querySelector('[data-a="close"]').onclick = sh.close;
+    sh.sheet.querySelector('[data-a="wx"]').onclick = function(){ sh.close(); if(lockedGuard(trip)) return; openWeatherSheet(trip, date); };
+    sh.sheet.querySelector('[data-a="haccp"]').onclick = function(){ sh.close(); openHaccpSheet(trip, date); };
+    sh.sheet.querySelector('[data-a="dffe"]').onclick = function(){ sh.close(); openDaySheet(trip, date); };
+  }
+  // Previous day's answers on any trip, so each day starts from the last one.
+  function lastHaccp(trip, date){
+    var all = [];
+    state.trips.forEach(function(t){ Object.keys(t.haccp||{}).forEach(function(d){ if(t.haccp[d].doneAt && !(t===trip && d===date)) all.push({ d:d, h:t.haccp[d] }); }); });
+    all.sort(function(a,b){ return a.d.localeCompare(b.d); });
+    var before = all.filter(function(x){ return x.d<date; });
+    return (before.length ? before[before.length-1] : all[all.length-1] || {}).h || null;
+  }
+  function haccpDefaults(trip, date){
+    var prev = lastHaccp(trip, date);
+    var h = { san:{}, dailyTemp:"", inspectedBy:state.settings.skipper, doneAt:"", fish:[] };
+    SAN_OPS.concat(SAN_STORE).forEach(function(q){ h.san[q] = (prev && prev.san[q]) || "Y"; });
+    if(prev && prev.inspectedBy) h.inspectedBy = prev.inspectedBy;
+    var list = stopsOn(trip, date);
+    var info = dayInfo(trip, date);
+    var times = list.map(function(x){ return x.time; }).filter(Boolean);
+    allSpecies().forEach(function(sp){
+      if(!sumSp(list, sp.code)) return;
+      var pf = prev && prev.fish.find(function(f){ return f.sp===sp.code; }) || (prev && prev.fish[0]) || {};
+      var row = { sp:sp.code, catchTime: fmtDate(date)+" "+(times.length ? times[0]+(times.length>1?"-"+times[times.length-1]:"") : ""), waterTemp: info.sst || "" };
+      FISH_FIELDS.forEach(function(f){
+        if(row[f.k]!==undefined) return;
+        if(f.yn) row[f.k] = pf[f.k] || f.yn;
+        else if(f.k==="haulToIce") row[f.k] = pf.haulToIce || "";
+        else row[f.k] = "";
+      });
+      h.fish.push(row);
+    });
+    return h;
+  }
+  function openHaccpSheet(trip, date){
+    var saved = trip.haccp[date];
+    var h = saved ? JSON.parse(JSON.stringify(saved)) : haccpDefaults(trip, date);
+    // Species caught since the check was saved get a row too.
+    var fresh = haccpDefaults(trip, date);
+    fresh.fish.forEach(function(r){ if(!h.fish.some(function(f){ return f.sp===r.sp; })) h.fish.push(r); });
+    var dirty = !saved;
+    function yn(name, v, expect){
+      return '<div class="chiprow" data-chips="'+esc(name)+'" data-required>'+["Y","N"].map(function(c){
+        return '<div class="chip sq'+(v===c?" on":"")+'" data-v="'+c+'"'+(v===c && c!==expect ? ' style="background:var(--danger);border-color:var(--danger);color:#fff;"' : '')+'>'+(c==="Y"?"Yes":"No")+'</div>';
+      }).join("")+'</div>';
+    }
+    function sanRows(list){ return list.map(function(q){ return '<div class="row-between" style="padding:6px 0;border-bottom:1px solid var(--line);"><div style="font-size:15px;">'+esc(q)+'</div>'+yn("san:"+q, h.san[q], "Y")+'</div>'; }).join(""); }
+    var html = '<h2>End of day — '+esc(fmtDay(date))+'</h2>'+
+      '<p class="helptext" style="margin:0 0 6px;">Filled in from the stops and your answers last time. Change only what\'s different, then save. Answers that need attention show red.</p>'+
+      '<div class="sectionlabel" style="font-size:15px;color:var(--text);">Fresh fish inspection</div>';
+    h.fish.forEach(function(f, i){
+      var sp = speciesOf(f.sp);
+      html += '<div class="card" style="padding:10px;"><b>'+esc(sp.name)+' — '+sumSp(stopsOn(trip,date), f.sp)+' fish</b>'+
+        '<div class="grid2" style="margin-top:8px;">'+
+          field("Date & time of catch", "f"+i+"_catchTime", f.catchTime)+field("Water temp °C", "f"+i+"_waterTemp", f.waterTemp, "text", 'inputmode="decimal"')+
+          field("Time from haul to ice", "f"+i+"_haulToIce", f.haulToIce, "text", 'placeholder="e.g. 15 min"')+field("Temp prior to icing °C", "f"+i+"_tPrior", f.tPrior, "text", 'inputmode="decimal"')+
+        '</div><div class="grid3">'+field("After 6 h", "f"+i+"_t6", f.t6, "text", 'inputmode="decimal"')+field("After 12 h", "f"+i+"_t12", f.t12, "text", 'inputmode="decimal"')+field("After 16 h", "f"+i+"_t16", f.t16, "text", 'inputmode="decimal"')+'</div>'+
+        FISH_FIELDS.filter(function(x){ return x.yn; }).map(function(x){ return '<div class="row-between" style="padding:4px 0;"><div style="font-size:15px;">'+esc(x.label)+'</div>'+yn("f"+i+":"+x.k, f[x.k], x.yn)+'</div>'; }).join("")+
+        '</div>';
+    });
+    if(!h.fish.length) html += '<p class="helptext">No fish logged on this day.</p>';
+    html += '<div class="sectionlabel" style="font-size:15px;color:var(--text);">Operation and sanitation</div>'+sanRows(SAN_OPS)+
+      '<div class="sectionlabel" style="font-size:15px;color:var(--text);">Storage</div>'+sanRows(SAN_STORE)+
+      '<div class="grid2" style="margin-top:10px;">'+field("Daily temp °C", "hDailyTemp", h.dailyTemp, "text", 'inputmode="decimal"')+field("Inspected by", "hBy", h.inspectedBy)+'</div>'+
+      '<p class="helptext">Offloading temperatures are added on discharge day (Reports → HACCP).</p>'+
+      '<div class="sheet-foot"><button class="btn btn-outline" data-a="cancel">Cancel</button><button class="btn btn-accent" data-a="save">Save check</button></div>';
+    var sh = openSheet(html, { guard:function(){ return dirty; } });
+    var root = sh.sheet;
+    wireChips(root, function(name, v){
+      dirty = true;
+      // Re-colour: red when the answer isn't the expected one.
+      var row = root.querySelector('[data-chips="'+(window.CSS && CSS.escape ? CSS.escape(name) : name)+'"]');
+      var expect = name.indexOf("san:")===0 ? "Y" : (FISH_FIELDS.find(function(x){ return x.k===name.split(":")[1]; })||{}).yn;
+      row.querySelectorAll(".chip").forEach(function(c){ c.removeAttribute("style"); if(c.classList.contains("on") && c.getAttribute("data-v")!==expect) c.setAttribute("style","background:var(--danger);border-color:var(--danger);color:#fff;"); });
+    });
+    root.addEventListener("input", function(){ dirty = true; });
+    root.querySelector('[data-a="cancel"]').onclick = function(){ tryClose(sh.entry); };
+    root.querySelector('[data-a="save"]').onclick = function(){
+      if(storageLocked){ lockedGuard(trip); return; }
+      SAN_OPS.concat(SAN_STORE).forEach(function(q){ h.san[q] = chipValue(root, "san:"+q) || h.san[q]; });
+      h.fish.forEach(function(f, i){
+        FISH_FIELDS.forEach(function(x){
+          if(x.yn) f[x.k] = chipValue(root, "f"+i+":"+x.k) || f[x.k];
+          else { var el = root.querySelector("#f"+i+"_"+x.k); if(el) f[x.k] = el.value.trim(); }
+        });
+      });
+      h.dailyTemp = val(root,"hDailyTemp"); h.inspectedBy = val(root,"hBy"); h.doneAt = new Date().toISOString();
+      trip.haccp[date] = normaliseHaccp(h);
+      saveState(); sh.close(); render(); showToast("End-of-day check saved");
+    };
+  }
+  function openOffloadTemps(trip){
+    var dates = Object.keys(trip.haccp).filter(function(d){ return trip.haccp[d].fish.length; }).sort();
+    if(!dates.length){ showToast("Do the end-of-day HACCP checks first", true); return; }
+    var html = '<h2>Offloading temperatures</h2><p class="helptext" style="margin:0 0 8px;">Core temperature at discharge, per day\'s catch.</p>';
+    dates.forEach(function(d){ trip.haccp[d].fish.forEach(function(f, i){ html += field(fmtDay(d)+" — "+speciesOf(f.sp).name+" °C", "off_"+d+"_"+i, f.tOff, "text", 'inputmode="decimal"'); }); });
+    html += '<div class="sheet-foot"><button class="btn btn-outline" data-a="cancel">Cancel</button><button class="btn btn-accent" data-a="save">Save</button></div>';
+    var sh = openSheet(html);
+    sh.sheet.querySelector('[data-a="cancel"]').onclick = sh.close;
+    sh.sheet.querySelector('[data-a="save"]').onclick = function(){
+      dates.forEach(function(d){ trip.haccp[d].fish.forEach(function(f, i){ f.tOff = val(sh.sheet, "off_"+d+"_"+i); }); });
+      saveState(); sh.close(); render(); showToast("Offloading temperatures saved");
+    };
+  }
+
+  // ---------- HACCP PDFs, laid out like the paper books ----------
+  function sigOnPdf(doc, trip, x, y, w){
+    if(trip.skipperSig){ try{ doc.addImage(trip.skipperSig, "PNG", x, y-w*0.33, w, w*0.33); }catch(e){} }
+  }
+  function pdfHeader(doc, title, trip, pageW){
+    doc.setFont("helvetica","bold"); doc.setFontSize(14);
+    var tl = title.indexOf("\n")>=0 ? title.split("\n") : doc.splitTextToSize(title, pageW-30);
+    if(tl.length>1){ doc.setFontSize(13); doc.text(tl, pageW/2, 9, { align:"center", lineHeightFactor:1.1 }); }
+    else doc.text(title, pageW/2, 14, { align:"center" });
+    doc.setFontSize(10);
+    var dates = tripDates(trip);
+    doc.text("VESSEL: ", 12, 23); doc.setFont("helvetica","normal"); doc.text(state.settings.vessel+"  ("+state.settings.registrationNo+")", 30, 23);
+    doc.setFont("helvetica","bold"); doc.text("TRIP DATES: ", pageW/2, 23); doc.setFont("helvetica","normal");
+    doc.text((dates.length ? fmtDate(dates[0])+" - "+fmtDate(dates[dates.length-1]) : fmtDate(trip.sailDate))+(trip.tripNumber?"   (Trip "+trip.tripNumber+")":""), pageW/2+24, 23);
+  }
+  function cellText(doc, txt, x, y, w, h, opts){
+    opts = opts || {};
+    if(opts.fill){ doc.setFillColor(opts.fill[0],opts.fill[1],opts.fill[2]); doc.rect(x,y,w,h,"F"); }
+    doc.setDrawColor(120); doc.rect(x, y, w, h);
+    if(txt===undefined || txt===null || txt==="") return;
+    doc.setFont("helvetica", opts.bold ? "bold" : "normal"); doc.setFontSize(opts.size || 8);
+    var lines = doc.splitTextToSize(String(txt), w-2);
+    var lh = (opts.size||8)*0.42;
+    var ty = y + h/2 - (lines.length-1)*lh/2 + lh*0.35;
+    lines.forEach(function(l, i){ doc.text(l, opts.left ? x+1.5 : x+w/2, ty+i*lh, opts.left ? {} : { align:"center" }); });
+  }
+  function buildSanitationPdf(trip){
+    var doc = new window.jspdf.jsPDF({ unit:"mm", format:"a4", orientation:"portrait" });
+    var W = 210;
+    var dates = Object.keys(trip.haccp).filter(function(d){ return trip.haccp[d].doneAt; }).sort();
+    if(!dates.length){ showToast("No end-of-day checks saved on this trip", true); return; }
+    for(var page=0; page*7<dates.length; page++){
+      if(page) doc.addPage();
+      var ds = dates.slice(page*7, page*7+7);
+      pdfHeader(doc, "DAILY OPERATIONS\nSANITATION AND STORAGE PROCESS CONTROL REPORT", trip, W);
+      var x0 = 12, qW = 72, cW = (W-24-qW)/14, y = 30, rh = 7;
+      cellText(doc, "OPERATION AND SANITATION", x0, y, qW, rh, { bold:true, left:true, size:9 });
+      for(var i=0;i<7;i++) cellText(doc, ds[i] ? "Date: "+fmtDate(ds[i]).slice(0,5) : "Date:", x0+qW+i*2*cW, y, 2*cW, rh, { size:7, bold:true });
+      y += rh;
+      cellText(doc, "Area", x0, y, qW, rh, { left:true });
+      for(i=0;i<14;i++) cellText(doc, i%2 ? "No" : "Yes", x0+qW+i*cW, y, cW, rh, { size:7 });
+      y += rh;
+      function block(list){
+        list.forEach(function(q){
+          cellText(doc, q+" ?", x0, y, qW, rh, { left:true, size:7.5 });
+          for(var k=0;k<7;k++){
+            var a = ds[k] ? trip.haccp[ds[k]].san[q] : "";
+            cellText(doc, a==="Y" ? "X" : "", x0+qW+k*2*cW, y, cW, rh, { bold:true, size:9 });
+            cellText(doc, a==="N" ? "X" : "", x0+qW+k*2*cW+cW, y, cW, rh, { bold:true, size:9, fill: a==="N" ? [255,215,205] : null });
+          }
+          y += rh;
+        });
+      }
+      block(SAN_OPS);
+      cellText(doc, "STORAGE", x0, y, qW, rh, { bold:true, left:true, size:9 }); for(i=0;i<14;i++) cellText(doc, "", x0+qW+i*cW, y, cW, rh); y += rh;
+      block(SAN_STORE);
+      cellText(doc, "DAILY TEMP.", x0, y, qW, rh, { bold:true, left:true, size:9 });
+      for(i=0;i<7;i++) cellText(doc, ds[i] ? trip.haccp[ds[i]].dailyTemp : "", x0+qW+i*2*cW, y, 2*cW, rh);
+      y += rh;
+      cellText(doc, "Inspected by:", x0, y, qW, rh+4, { left:true, bold:true });
+      for(i=0;i<7;i++) cellText(doc, ds[i] ? trip.haccp[ds[i]].inspectedBy : "", x0+qW+i*2*cW, y, 2*cW, rh+4, { size:6.5 });
+      y += rh+14;
+      doc.setFont("helvetica","normal"); doc.setFontSize(10);
+      doc.text("Skipper: "+state.settings.skipper, x0, y); sigOnPdf(doc, trip, 90, y+2, 45); doc.line(90, y+2, 140, y+2);
+    }
+    saveFileOut(fileName(trip, "haccp_sanitation", "pdf"), doc.output("blob"));
+  }
+  function buildFishInspectionPdf(trip){
+    var doc = new window.jspdf.jsPDF({ unit:"mm", format:"a4", orientation:"landscape" });
+    var W = 297;
+    var rows = [];
+    Object.keys(trip.haccp).sort().forEach(function(d){ trip.haccp[d].fish.forEach(function(f){ rows.push(f); }); });
+    if(!rows.length){ showToast("No end-of-day checks with fish on this trip", true); return; }
+    var per = 10;
+    for(var page=0; page*per<rows.length; page++){
+      if(page) doc.addPage();
+      var rs = rows.slice(page*per, page*per+per);
+      pdfHeader(doc, "FRESH FISH INSPECTION AND PROCESSING CONTROL REPORT", trip, W);
+      var x0 = 10, y = 30, hh = 11, rh = 7.5;
+      var top = [["Specie ?","sp",24],["Date & time of catch ?","catchTime",34],["Water temp ?","waterTemp",20],["Icing Correct ?","icing",22],["Time from haul to ice ?","haulToIce",26],["Temp prior to icing ?","tPrior",26],["Temp after 6 hours ?","t6",26],["Temp after 12 hours ?","t12",26],["Temp after 16 hours ?","t16",26],["Off Loading Temperatures","tOff",27]];
+      var x = x0;
+      top.forEach(function(c){ cellText(doc, c[0], x, y, c[2], hh, { bold:true, size:7.5 }); x += c[2]; });
+      y += hh;
+      rs.forEach(function(f){
+        x = x0;
+        top.forEach(function(c){
+          var v = c[1]==="sp" ? speciesOf(f.sp).name : (f[c[1]]==="Y" ? "Yes" : f[c[1]]==="N" ? "No" : f[c[1]]);
+          cellText(doc, v, x, y, c[2], rh, { size:7.5, fill: (c[1]==="icing" && f.icing==="N") ? [255,215,205] : null }); x += c[2];
+        });
+        y += rh;
+      });
+      y += 8;
+      var q = [["decomposed","Decomposed ?"],["poisonous","Poisonous ?"],["tainted","Tainted ?"],["foreign","Foreign Matter ?"],["parasites","Parasites ?"]];
+      var tail = [["gutting","Gutting ?"],["washing","Washing ?"],["offal","Offal discharge Hygienic ?"]];
+      var spW = 24, dW = 34, ynW = 15, tW = (W-2*x0-spW-dW-q.length*2*ynW)/tail.length;
+      x = x0;
+      cellText(doc, "Specie ?", x, y, spW, hh+5, { bold:true, size:7.5 }); x += spW;
+      cellText(doc, "Date & time of catch ?", x, y, dW, hh+5, { bold:true, size:7.5 }); x += dW;
+      q.forEach(function(c){ cellText(doc, c[1], x, y, 2*ynW, hh, { bold:true, size:7.5 }); cellText(doc, "YES", x, y+hh, ynW, 5, { size:6.5, fill:[225,225,225] }); cellText(doc, "NO", x+ynW, y+hh, ynW, 5, { size:6.5, fill:[225,225,225] }); x += 2*ynW; });
+      tail.forEach(function(c){ cellText(doc, c[1], x, y, tW, hh+5, { bold:true, size:7.5 }); x += tW; });
+      y += hh+5;
+      rs.forEach(function(f){
+        x = x0;
+        cellText(doc, speciesOf(f.sp).name, x, y, spW, rh, { size:7.5 }); x += spW;
+        cellText(doc, f.catchTime, x, y, dW, rh, { size:7 }); x += dW;
+        q.forEach(function(c){
+          cellText(doc, f[c[0]]==="Y" ? "X" : "", x, y, ynW, rh, { bold:true, fill: f[c[0]]==="Y" ? [255,215,205] : null });
+          cellText(doc, f[c[0]]==="N" ? "X" : "", x+ynW, y, ynW, rh, { bold:true }); x += 2*ynW;
+        });
+        tail.forEach(function(c){ cellText(doc, f[c[0]]==="Y" ? "Yes" : f[c[0]]==="N" ? "No" : "", x, y, tW, rh, { size:7.5 }); x += tW; });
+        y += rh;
+      });
+      y += 12;
+      doc.setFont("helvetica","normal"); doc.setFontSize(10);
+      doc.text("Skipper: "+state.settings.skipper, x0, y); sigOnPdf(doc, trip, 70, y+2, 45); doc.line(70, y+2, 120, y+2);
+    }
+    saveFileOut(fileName(trip, "haccp_fresh_fish", "pdf"), doc.output("blob"));
   }
 
   // ================= Weight sheet =================
@@ -1223,28 +1678,31 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
   function renderWeights(trip){
     setTopbar(tripLabel(trip)+" · Weights", "Offload weigh sheet");
     var el = document.getElementById("screen");
-    var a = weightStats(trip,"ALB"), y = weightStats(trip,"YFT");
-    var tot = tripTotals(trip);
+    var sps = speciesInTrip(trip);
+    if(!sps.some(function(x){ return x.code==="ALB"; })) sps.unshift(speciesOf("ALB"));
+    if(!sps.some(function(x){ return x.code===wsSpecies; })) sps.push(speciesOf(wsSpecies));
     var html = backButton(tripLabel(trip))+
-      '<div class="card"><div class="totals">'+
-        '<div><div class="n">'+a.n+'</div><div class="l">ALB · '+kg(a.kg)+' kg<br>avg '+kg(a.avg)+'</div></div>'+
-        '<div><div class="n yf">'+y.n+'</div><div class="l">YFT · '+kg(y.kg)+' kg<br>avg '+kg(y.avg)+'</div></div>'+
-      '</div>'+
-      ((a.n && a.n!==tot.alb) || (y.n && y.n!==tot.yft) ? '<p class="helptext" style="text-align:center;">Stop log counted '+tot.alb+' ALB and '+tot.yft+' YFT.</p>' : '')+
-      '</div>'+
-      '<div class="card">'+chips("sp", [{code:"ALB",label:"Albacore"},{code:"YFT",label:"Yellowfin"}], wsSpecies)+
+      '<div class="card"><div class="totals">'+sps.map(function(sp){
+        var st = weightStats(trip, sp.code), counted = sumSp(trip.stops, sp.code);
+        return '<div><div class="n'+(sp.code==="ALB"?"":" yf")+'">'+st.n+'</div><div class="l">'+esc(sp.short)+' · '+kg(st.kg)+' kg<br>avg '+kg(st.avg)+(counted!==st.n?'<br>stops: '+counted:'')+'</div></div>';
+      }).join("")+'</div></div>'+
+      '<div class="card">'+chips("sp", sps.map(function(sp){ return { code:sp.code, label:sp.name }; }).concat([{ code:"__more", label:"+ Other" }]), wsSpecies)+
       '<div class="wsentry" style="margin-top:10px;"><input id="wKg" type="number" inputmode="decimal" step="0.1" placeholder="kg"><button class="btn btn-accent" id="btnAddW">Add</button></div>'+
-      (wsSpecies==="YFT" ? '<div style="margin-top:8px;">'+field("Fork length cm (optional)", "wLen", "", "text", 'inputmode="numeric"')+'</div>' : '')+
+      (wsSpecies!=="ALB" ? '<div style="margin-top:8px;">'+field("Fork length cm (optional)", "wLen", "", "text", 'inputmode="numeric"')+'</div>' : '')+
       '<p class="helptext">Type a weight and press Add (or Enter on the keyboard). Tap a weight to change or delete it.</p></div>';
-    ["ALB","YFT"].forEach(function(sp){
+    allSpecies().forEach(function(spx){
+      var sp = spx.code;
       var list = trip.weights.filter(function(w){ return w.sp===sp; });
       if(!list.length) return;
-      html += '<div class="sectionlabel">'+SPECIES[sp]+' ('+list.length+')</div><div class="wsgrid">'+
-        list.map(function(w, i){ return '<div class="wscell'+(sp==="YFT"?" yf":"")+'" data-w="'+w.id+'"><div class="i">'+(i+1)+'</div><div class="v">'+esc(w.kg)+'</div>'+(w.len?'<div class="i">'+esc(w.len)+' cm</div>':'')+'</div>'; }).join("")+'</div>';
+      html += '<div class="sectionlabel">'+esc(spx.name)+' ('+list.length+')</div><div class="wsgrid">'+
+        list.map(function(w, i){ return '<div class="wscell'+(sp!=="ALB"?" yf":"")+'" data-w="'+w.id+'"><div class="i">'+(i+1)+'</div><div class="v">'+esc(w.kg)+'</div>'+(w.len?'<div class="i">'+esc(w.len)+' cm</div>':'')+'</div>'; }).join("")+'</div>';
     });
     el.innerHTML = html;
     wireBack(function(){ go("trip"); });
-    wireChips(el, function(name, v){ wsSpecies = v || "ALB"; render(); setTimeout(function(){ var k = document.getElementById("wKg"); if(k) k.focus(); }, 50); });
+    wireChips(el, function(name, v){
+      if(v==="__more"){ pickSpecies(sps.map(function(x){ return x.code; }), function(code){ wsSpecies = code; render(); }); render(); return; }
+      wsSpecies = v || "ALB"; render(); setTimeout(function(){ var k = document.getElementById("wKg"); if(k) k.focus(); }, 50);
+    });
     var input = document.getElementById("wKg");
     function add(){
       if(storageLocked){ lockedGuard(trip); return; }
@@ -1262,7 +1720,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
   }
   function openWeightEdit(trip, id){
     var w = trip.weights.find(function(x){ return x.id===id; }); if(!w) return;
-    var sh = openSheet('<h2>Edit weight</h2>'+chips("sp", [{code:"ALB",label:"Albacore"},{code:"YFT",label:"Yellowfin"}], w.sp)+
+    var sh = openSheet('<h2>Edit weight</h2>'+chips("sp", allSpecies().map(function(sp){ return { code:sp.code, label:sp.name }; }), w.sp)+
       '<div class="grid2" style="margin-top:10px;">'+field("Weight kg", "eKg", w.kg, "number", 'inputmode="decimal" step="0.1"')+field("Fork length cm", "eLen", w.len, "text", 'inputmode="numeric"')+'</div>'+
       '<div class="sheet-foot"><button class="btn btn-danger" data-a="del">Delete</button><button class="btn btn-accent" data-a="save">Save</button></div>');
     wireChips(sh.sheet);
@@ -1280,14 +1738,29 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
   function renderCrew(trip){
     setTopbar(tripLabel(trip)+" · Crew", trip.crew.length+" on board");
     var el = document.getElementById("screen");
-    var html = backButton(tripLabel(trip))+
-      '<div class="actions"><button class="btn btn-accent" id="btnAddCrew">+ Add crew</button><button class="btn btn-ghost" id="btnCrewPdf">📄 Crew list PDF</button></div>';
+    var html = backButton(tripLabel(trip));
+    if(trip.crewConfirmedAt) html += '<div class="card" style="border-color:var(--kelp);"><b style="color:var(--kelp);">✓ Crew list confirmed</b><div class="helptext" style="margin:2px 0 0;">'+esc(fmtDay(todayISO(new Date(trip.crewConfirmedAt))))+' — any change needs confirming again.</div></div>';
+    else if(trip.crew.length) html += '<div class="locked-note"><span>Check the names, add or remove anyone, then confirm.</span></div>';
+    html += '<div class="actions"><button class="btn btn-ghost" id="btnAddCrew">+ Add crew</button><button class="btn btn-ghost" id="btnCrewPdf">📄 Crew list PDF</button></div>';
+    var prevTrip = state.trips.filter(function(t){ return t!==trip && t.crew.length; }).sort(function(a,b){ return b.createdAt-a.createdAt; })[0];
+    if(!trip.crew.length && prevTrip && !trip.ended) html += '<button class="btn btn-ghost" id="btnImportCrew" style="margin-bottom:12px;">⤓ Import crew from '+esc(tripLabel(prevTrip))+' ('+prevTrip.crew.length+')</button>';
     if(!trip.crew.length) html += '<div class="empty"><div class="big">👥</div>No crew on this trip yet.</div>';
     trip.crew.forEach(function(c, i){
       html += '<div class="lineitem" data-crew="'+c.id+'"><div class="num">'+(i+1)+'</div><div class="meta"><div class="t1">'+esc(c.name+" "+c.surname)+'</div><div class="t2">'+esc(c.role||"Crew")+(c.idNumber?' · '+esc(c.idNumber):'')+'</div></div><div class="chev">›</div></div>';
     });
+    if(trip.crew.length && !trip.crewConfirmedAt && !trip.ended) html += '<button class="btn btn-accent btn-big" id="btnConfirmCrew" style="margin-top:8px;">✓ Confirm crew list ('+trip.crew.length+')</button>';
     el.innerHTML = html;
     wireBack(function(){ go("trip"); });
+    var ic = document.getElementById("btnImportCrew");
+    if(ic) ic.onclick = function(){ trip.crew = prevTrip.crew.map(function(c){ return Object.assign({}, c, { id:uid() }); }); trip.crewConfirmedAt = ""; saveState(); render(); };
+    var cc = document.getElementById("btnConfirmCrew");
+    if(cc) cc.onclick = function(){
+      if(lockedGuard(trip)) return;
+      var noId = trip.crew.filter(function(c){ return !c.idNumber; }).length;
+      showConfirm("Confirm these "+trip.crew.length+" people as the crew for "+tripLabel(trip)+"?"+(noId?"\n\n"+noId+" without an ID number.":""), "Confirm", "btn-accent", function(){
+        trip.crewConfirmedAt = new Date().toISOString(); saveState(); go("trip"); showToast("Crew list confirmed");
+      });
+    };
     document.getElementById("btnAddCrew").onclick = function(){ if(lockedGuard(trip)) return; openCrewSheet(trip, null); };
     document.getElementById("btnCrewPdf").onclick = function(){ buildCrewPdf(trip); };
     el.querySelectorAll("[data-crew]").forEach(function(r){ r.onclick = function(){ if(lockedGuard(trip)) return; openCrewSheet(trip, trip.crew.find(function(c){ return c.id===r.getAttribute("data-crew"); })); }; });
@@ -1308,17 +1781,18 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     if(kl) kl.addEventListener("click", function(e){
       var c = e.target.closest("[data-k]"); if(!c) return;
       var k = known[int(c.getAttribute("data-k"))];
-      trip.crew.push({ id:uid(), name:k.name, surname:k.surname, idNumber:k.idNumber, role:k.role||"Crew" });
+      trip.crew.push({ id:uid(), name:k.name, surname:k.surname, idNumber:k.idNumber, role:k.role||"Crew" }); trip.crewConfirmedAt = "";
       saveState(); sh.close(); render(); showToast(k.name+" added");
     });
     var cancel = sh.sheet.querySelector('[data-a="cancel"]'); if(cancel) cancel.onclick = sh.close;
     var del = sh.sheet.querySelector('[data-a="del"]');
-    if(del) del.onclick = function(){ showConfirm("Remove "+p.name+" "+p.surname+" from this trip?", "Remove", "btn-danger", function(){ trip.crew = trip.crew.filter(function(c){ return c!==person; }); saveState(); sh.close(); render(); }); };
+    if(del) del.onclick = function(){ showConfirm("Remove "+p.name+" "+p.surname+" from this trip?", "Remove", "btn-danger", function(){ trip.crew = trip.crew.filter(function(c){ return c!==person; }); trip.crewConfirmedAt = ""; saveState(); sh.close(); render(); }); };
     sh.sheet.querySelector('[data-a="save"]').onclick = function(){
       var rec = person || { id:uid() };
       rec.name = val(sh.sheet,"cName"); rec.surname = val(sh.sheet,"cSurname"); rec.idNumber = val(sh.sheet,"cId"); rec.role = chipValue(sh.sheet,"role") || "Crew";
       if(!rec.name){ showToast("Enter a name", true); return; }
       if(!person) trip.crew.push(rec);
+      trip.crewConfirmedAt = "";
       rememberCrew(rec);
       saveState(); sh.close(); render();
     };
@@ -1351,8 +1825,9 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
       [String(i+1), c.name, c.surname, c.idNumber, c.role||"Crew"].forEach(function(v,j){ doc.text(String(v||""), cols[j], y); });
       doc.setDrawColor(200); doc.line(13, y+2, 197, y+2); y += 8;
     });
-    y += 14;
-    doc.text("Skipper signature: ______________________________        Date: ______________", 15, Math.min(y, 285));
+    y = Math.min(y + 16, 280);
+    doc.text("Skipper signature:", 15, y); sigOnPdf(doc, trip, 50, y+1, 45); doc.line(50, y+1, 110, y+1);
+    doc.text("Date: "+(trip.crewConfirmedAt ? fmtDate(todayISO(new Date(trip.crewConfirmedAt))) : "______________"), 125, y);
     saveFileOut(fileName(trip, "crew_list", "pdf"), doc.output("blob"));
   }
 
@@ -1361,20 +1836,26 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     setTopbar(tripLabel(trip)+" · Reports", tripRange(trip));
     var el = document.getElementById("screen");
     var rows = dffeRows(trip);
-    var a = weightStats(trip,"ALB"), y = weightStats(trip,"YFT");
+    var sps = dffeSpecies(trip);
     var html = backButton(tripLabel(trip));
-    html += '<div class="card"><h2>DFFE catch statistics</h2>'+
-      '<table class="tbl"><tr><th>Date</th><th>Start pos.</th><th class="r">ALB</th><th class="r">kg</th><th class="r">YFT</th><th class="r">kg</th></tr>'+
-      rows.map(function(r){ return '<tr><td>'+esc(r.dateShort)+'</td><td>'+esc(r.posText)+'</td><td class="r"><b>'+r.alb+'</b></td><td class="r">'+(r.albKg===""?"–":r.albKg)+'</td><td class="r">'+r.yft+'</td><td class="r">'+(r.yftKg===""?"–":r.yftKg)+'</td></tr>'; }).join("")+
-      '<tr><td><b>Offload</b></td><td></td><td class="r">'+(a.n||"")+'</td><td class="r"><b>'+(a.n?kg(a.kg):"–")+'</b></td><td class="r">'+(y.n||"")+'</td><td class="r"><b>'+(y.n?kg(y.kg):"–")+'</b></td></tr></table>'+
-      '<p class="helptext">'+(a.n ? "Daily kg = daily count × offload average ("+kg(a.avg)+" kg ALB"+(y.n?", "+kg(y.avg)+" kg YFT":"")+")." : "Daily kg fill in once the offload weights are entered.")+
-      (rows.length>16 ? " <b>More than 16 days — only the first 16 fit on one form.</b>" : "")+'</p>'+
+    html += '<div class="card"><h2>DFFE catch statistics</h2><div style="overflow-x:auto;">'+
+      '<table class="tbl"><tr><th>Date</th><th>Start pos.</th>'+sps.map(function(sp){ return '<th class="r">'+esc(sp.short)+'</th><th class="r">kg</th>'; }).join("")+'</tr>'+
+      rows.map(function(r){ return '<tr><td>'+esc(r.dateShort)+'</td><td>'+esc(r.posText)+'</td>'+sps.map(function(sp){ var c = r.sp[sp.code]; return '<td class="r"><b>'+c.n+'</b></td><td class="r">'+(c.kg===""?"–":c.kg)+'</td>'; }).join("")+'</tr>'; }).join("")+
+      '<tr><td><b>Offload</b></td><td></td>'+sps.map(function(sp){ var st = weightStats(trip, sp.code); return '<td class="r">'+(st.n||"")+'</td><td class="r"><b>'+(st.n?kg(st.kg):"–")+'</b></td>'; }).join("")+'</tr></table></div>'+
+      '<p class="helptext">Daily kg = daily count × the offload average for that species.'+(rows.length>16 ? " <b>More than 16 days — only the first 16 fit on one form.</b>" : "")+'</p>'+
       dffeChecks(trip).map(function(w){ return '<div class="locked-note">'+esc(w)+'</div>'; }).join("")+
       '<button class="btn btn-accent" id="btnDffe">DFFE form (Excel)</button></div>';
+    var hd = Object.keys(trip.haccp).filter(function(d){ return trip.haccp[d].doneAt; }).length;
+    html += '<div class="card"><h2>HACCP</h2><p class="helptext" style="margin:0 0 10px;">End-of-day checks saved for '+hd+' of '+tripDates(trip).length+' days.</p><div class="sheet-actions">'+
+      '<button class="btn btn-ghost" id="btnOffTemps">🌡 Offloading temperatures</button>'+
+      '<button class="btn btn-ghost" id="btnFishPdf">Fresh fish inspection (PDF)</button>'+
+      '<button class="btn btn-ghost" id="btnSanPdf">Sanitation &amp; storage (PDF)</button>'+
+      '</div></div>';
     html += '<div class="card"><h2>Other files</h2><div class="sheet-actions">'+
+      '<button class="btn btn-ghost" id="btnCrewPdf2">Crew list (PDF)</button>'+
       '<button class="btn btn-ghost" id="btnStopsCsv">Stop log (CSV)</button>'+
       '<button class="btn btn-ghost" id="btnWeightsCsv">Weight sheet (CSV)</button>'+
-      '<button class="btn btn-ghost" id="btnCrewPdf2">Crew list (PDF)</button>'+
+      (trip.skipperSig ? '' : '<button class="btn btn-outline" id="btnSignR">✍ Add skipper signature</button>')+
       '</div></div>';
     el.innerHTML = html;
     wireBack(function(){ go("trip"); });
@@ -1382,53 +1863,69 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     document.getElementById("btnStopsCsv").onclick = function(){ saveFileOut(fileName(trip,"stop_log","csv"), new Blob([stopsCsv(trip)], { type:"text/csv" })); };
     document.getElementById("btnWeightsCsv").onclick = function(){ saveFileOut(fileName(trip,"weights","csv"), new Blob([weightsCsv(trip)], { type:"text/csv" })); };
     document.getElementById("btnCrewPdf2").onclick = function(){ buildCrewPdf(trip); };
+    document.getElementById("btnOffTemps").onclick = function(){ if(storageLocked){ lockedGuard(trip); return; } openOffloadTemps(trip); };
+    document.getElementById("btnFishPdf").onclick = function(){ buildFishInspectionPdf(trip); };
+    document.getElementById("btnSanPdf").onclick = function(){ buildSanitationPdf(trip); };
+    var sr = document.getElementById("btnSignR"); if(sr) sr.onclick = function(){ captureSkipperSig(trip); };
+  }
+  // Species for the form: always longfin, plus anything caught or weighed.
+  function dffeSpecies(trip){
+    var list = speciesInTrip(trip);
+    if(!list.some(function(x){ return x.code==="ALB"; })) list.unshift(speciesOf("ALB"));
+    return list;
   }
   function dffeChecks(trip){
     var w = [];
     if(!trip.tripNumber) w.push("Trip number is missing (Trip details).");
     if(!trip.dischargeDate) w.push("Discharge date is missing (End trip / Trip details).");
-    var a = weightStats(trip,"ALB"), t = tripTotals(trip);
-    if(a.n && a.n!==t.alb) w.push("Weigh sheet has "+a.n+" ALB but the stops add up to "+t.alb+". Check before sending.");
-    var y = weightStats(trip,"YFT");
-    if(y.n!==t.yft && (y.n || t.yft)) w.push("Weigh sheet has "+y.n+" YFT but the stops add up to "+t.yft+".");
-    tripDates(trip).forEach(function(d){ if(!dayInfo(trip,d).sst) w.push("No SST for "+fmtDay(d)+" (Day details)."); });
+    dffeSpecies(trip).forEach(function(sp){
+      var st = weightStats(trip, sp.code), n = sumSp(trip.stops, sp.code);
+      if(st.n!==n && (st.n || n)) w.push("Weigh sheet has "+st.n+" "+sp.short+" but the stops add up to "+n+".");
+    });
+    var custom = dffeSpecies(trip).filter(function(x){ return x.custom; });
+    if(custom.length>SPARE_COLS.length) w.push("The form has only "+SPARE_COLS.length+" spare species columns; "+custom.slice(SPARE_COLS.length).map(function(x){ return x.name; }).join(", ")+" won't fit.");
+    tripDates(trip).forEach(function(d){ if(!dayInfo(trip,d).sst) w.push("No SST for "+fmtDay(d)+" (Day ▾ → DFFE day details)."); });
     return w;
   }
   // One row per fishing day, in the shape the DFFE form wants.
   function dffeRows(trip){
-    var a = weightStats(trip,"ALB"), y = weightStats(trip,"YFT");
+    var sps = dffeSpecies(trip);
+    var avg = {}; sps.forEach(function(sp){ var st = weightStats(trip, sp.code); avg[sp.code] = st.n ? st.avg : null; });
     return tripDates(trip).map(function(d){
       var list = stopsOn(trip, d);
-      var first = list.find(function(s){ return s.lat!=="" && s.lon!==""; });
+      var first = list.find(function(x){ return x.lat!=="" && x.lon!==""; });
       var info = dayInfo(trip, d);
-      var alb = sumOf(list,"alb"), yft = sumOf(list,"yft");
       var lat = first ? degMin(first.lat) : null, lon = first ? degMin(first.lon) : null;
       var pole = Math.max(0, Math.min(100, int(info.polePct||"100")));
+      var sp = {}, caught = [];
+      sps.forEach(function(x){ var n = sumSp(list, x.code); sp[x.code] = { n:n, kg: avg[x.code]!==null ? Math.round(n*avg[x.code]) : "" }; if(n) caught.push(x.code); });
       return {
         date:d, dateText:fmtDate(d), dateShort:fmtDay(d), crew:info.crew, gear:info.gear,
         latDeg: lat ? lat.deg : "", latMin: lat ? Math.round(lat.min) : "", lonDeg: lon ? lon.deg : "", lonMin: lon ? Math.round(lon.min) : "",
         posText: first ? fmtPos(first.lat, first.lon) : "–",
-        sst: info.sst, target: yft ? "ALB YFT" : "ALB", hours: info.hours, liveBait: info.liveBait,
+        sst: info.sst, target: caught.length ? caught.join(" ") : "ALB", hours: info.hours, liveBait: info.liveBait,
         baitCondition: info.liveBait==="Y" ? (info.baitCondition||"") : "--",
-        alb: alb, albKg: a.n ? Math.round(alb*a.avg) : "", yft: yft, yftKg: y.n ? Math.round(yft*y.avg) : "",
+        sp: sp, alb: sp.ALB.n, albKg: sp.ALB.kg, yft: sp.YFT ? sp.YFT.n : 0, yftKg: sp.YFT ? sp.YFT.kg : "",
         pole: pole, line: 100-pole
       };
     });
   }
   function stopsCsv(trip){
-    var rows = [["Trip","Date","Time","Lat (dec)","Lon (dec)","Position","ALB","YFT","Day ALB","Trip ALB","Tank","SST C","Wind dir","Wind kn","Sea","Drift to","Drift kn","School depth m","Bait","Notes"]];
+    var sps = speciesInTrip(trip); if(!sps.some(function(x){ return x.code==="ALB"; })) sps.unshift(speciesOf("ALB"));
+    var rows = [["Trip","Date","Time","Lat (dec)","Lon (dec)","Position"].concat(sps.map(function(x){ return x.code; }),["Day ALB","Trip ALB","Tank","SST C","Wind dir","Wind kn","Sea","Drift to","Drift kn","School depth m","Bait","Day weather","Notes"])];
     var acc = 0, dayAcc = {};
-    sortedStops(trip).forEach(function(s){
-      acc += int(s.alb); dayAcc[s.date] = (dayAcc[s.date]||0) + int(s.alb);
-      rows.push([trip.tripNumber, s.date, s.time, s.lat, s.lon, fmtPos(s.lat,s.lon), s.alb, s.yft, dayAcc[s.date], acc, s.tank, s.sst, s.windDir, s.windKn, s.sea, s.driftDir, s.driftKn, s.schoolDepth, s.bait, s.notes]);
+    sortedStops(trip).forEach(function(st){
+      acc += int(st.alb); dayAcc[st.date] = (dayAcc[st.date]||0) + int(st.alb);
+      rows.push([trip.tripNumber, st.date, st.time, st.lat, st.lon, fmtPos(st.lat,st.lon)].concat(sps.map(function(x){ return countOf(st, x.code); }),
+        [dayAcc[st.date], acc, st.tank, st.sst, st.windDir, st.windKn, st.sea, st.driftDir, st.driftKn, st.schoolDepth, st.bait, weatherText(trip.days[st.date]), st.notes]));
     });
     return toCsv(rows);
   }
   function weightsCsv(trip){
     var rows = [["Trip","No.","Species","Weight kg","Fork length cm"]];
-    var n = { ALB:0, YFT:0 };
-    trip.weights.forEach(function(w){ n[w.sp]++; rows.push([trip.tripNumber, n[w.sp], w.sp, w.kg, w.len]); });
-    ["ALB","YFT"].forEach(function(sp){ var st = weightStats(trip, sp); if(st.n) rows.push(["","Total",sp,kg(st.kg),"avg "+kg(st.avg)]); });
+    var n = {};
+    trip.weights.forEach(function(w){ n[w.sp] = (n[w.sp]||0)+1; rows.push([trip.tripNumber, n[w.sp], w.sp, w.kg, w.len]); });
+    allSpecies().forEach(function(sp){ var st = weightStats(trip, sp.code); if(st.n) rows.push(["","Total",sp.code,kg(st.kg),"avg "+kg(st.avg)]); });
     return toCsv(rows);
   }
 
@@ -1483,7 +1980,17 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
       put("M6", s.permitNo); put("S6", s.contact); put("Z6", fmtDate(trip.dischargeDate));
       put("S7", s.email); put("Z7", s.port);
       var tripNo = trip.tripNumber ? (/^\d+$/.test(trip.tripNumber) ? int(trip.tripNumber) : trip.tripNumber) : "";
-      var a = weightStats(trip,"ALB"), y = weightStats(trip,"YFT");
+      var sps = dffeSpecies(trip);
+      // Fixed form columns; species the skipper added take the spare columns.
+      var colOf = {}, poleCols = { P:["Q","R"], S:["T","U"], V:["W","X"], Y:["Z","AA"] };
+      var spare = 0;
+      sps.forEach(function(sp){
+        var b = BUILTIN_SPECIES.find(function(x){ return x.code===sp.code; });
+        if(b) colOf[sp.code] = b.col;
+        else if(spare < SPARE_COLS.length){ colOf[sp.code] = SPARE_COLS[spare]; put(SPARE_COLS[spare]+"10", sp.name); spare++; }
+      });
+      var fixedCols = ["P","S","V","Y","AB","AC","AD"];
+      var a = weightStats(trip,"ALB");
       // Block 1 holds days 1-8 (rows 12-27), block 2 days 9-16 (rows 29-44).
       [[12,28],[29,45]].forEach(function(block, bi){
         var dayRows = rows.slice(bi*8, bi*8+8);
@@ -1495,18 +2002,24 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
           put("E"+R, r.latDeg); put("G"+R, r.latMin); put("H"+R, r.lonDeg); put("I"+R, r.lonMin);
           put("J"+R, r.sst ? (/^-?\d+(\.\d+)?$/.test(r.sst) ? num(r.sst) : r.sst) : "");
           put("K"+R, r.target); put("L"+R, r.hours!=="" ? num(r.hours) : ""); put("M"+R, r.liveBait); put("N"+R, r.baitCondition);
-          put("P"+R, r.alb); put("Q"+R, r.pole); put("R"+R, r.line);
-          put("S"+R, r.yft); put("T"+R, r.yft ? r.pole : 0); put("U"+R, r.yft ? r.line : 0);
-          ["V","W","X","Y","Z","AA","AB","AC","AD"].forEach(function(c){ put(c+R, 0); });
-          put("P"+(R+1), r.albKg); put("S"+(R+1), r.yftKg); put("V"+(R+1), 0); put("Y"+(R+1), 0);
+          fixedCols.forEach(function(c){ put(c+R, 0); if(poleCols[c]){ put(poleCols[c][0]+R, 0); put(poleCols[c][1]+R, 0); put(c+(R+1), 0); } });
+          sps.forEach(function(sp){
+            var c = colOf[sp.code]; if(!c) return;
+            var v = r.sp[sp.code];
+            put(c+R, v.n);
+            if(poleCols[c]){ put(poleCols[c][0]+R, v.n || c==="P" ? r.pole : 0); put(poleCols[c][1]+R, v.n || c==="P" ? r.line : 0); }
+            put(c+(R+1), v.kg);
+          });
         });
-        if(bi===0 || rows.length>8){ put("P"+block[1], a.n ? Math.round(a.kg*10)/10 : ""); put("S"+block[1], y.n ? Math.round(y.kg*10)/10 : ""); }
+        if(bi===0 || rows.length>8){
+          sps.forEach(function(sp){ var c = colOf[sp.code]; if(!c) return; var st = weightStats(trip, sp.code); put(c+block[1], st.n ? Math.round(st.kg*10)/10 : ""); });
+        }
       });
       var t = tripTotals(trip);
       var comment = "Comments: Trip "+(trip.tripNumber||"")+" sailed "+s.port+" "+fmtDate(trip.sailDate)+(trip.sailTime?" "+trip.sailTime:"")+
         (rows.length ? ", fished "+rows[0].dateText+(rows.length>1?" - "+rows[rows.length-1].dateText:"") : "")+
-        (trip.dischargeDate ? ", discharged "+fmtDate(trip.dischargeDate) : "")+". Stop log: "+t.alb+" ALB, "+t.yft+" YFT."+
-        (a.n ? " Offload: "+a.n+" ALB "+kg(a.kg)+" kg (avg "+kg(a.avg)+" kg)"+(y.n?", "+y.n+" YFT "+kg(y.kg)+" kg":"")+". Daily kg = daily count x offload average." : "")+
+        (trip.dischargeDate ? ", discharged "+fmtDate(trip.dischargeDate) : "")+". Stop log: "+sps.map(function(sp){ return sumSp(trip.stops, sp.code)+" "+sp.code; }).join(", ")+"."+
+        (a.n ? " Offload: "+sps.filter(function(sp){ return weightStats(trip, sp.code).n; }).map(function(sp){ var st = weightStats(trip, sp.code); return st.n+" "+sp.code+" "+kg(st.kg)+" kg"; }).join(", ")+". Daily kg = daily count x offload average." : "")+
         " Position = first stop of each day.";
       put("A46", comment);
       put("S56", s.skipper); put("AA56", fmtDate(trip.dischargeDate || todayISO()));
