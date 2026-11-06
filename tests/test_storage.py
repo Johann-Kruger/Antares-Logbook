@@ -1,5 +1,5 @@
 """A damaged logbook is never written over; backup and restore round-trip."""
-from harness import App, check, done, fake_season, KEY
+from harness import App, check, done, fake_season, same_stops, KEY
 import json
 
 app = App()
@@ -26,6 +26,6 @@ app.tap("#btnMenu"); app.tap('[data-a="backup"]')
 p.set_input_files("#restoreFile", path); p.wait_for_timeout(300)
 app.tap('.sheet-backdrop:last-child [data-a="ok"]')
 check(p.locator("[data-trip]").count() == 2, "restored trips listed")
-check(app.stored()["trips"][0]["stops"] == fake_season()["trips"][0]["stops"], "stops restored exactly")
+check(same_stops(app.stored()["trips"][0]["stops"], fake_season()["trips"][0]["stops"]), "stops restored exactly")
 app.close()
 done("test_storage")

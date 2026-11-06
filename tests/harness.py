@@ -69,6 +69,22 @@ class App:
         assert not self.errors, self.errors
         self.browser.close(); self.pw.stop(); self.srv.shutdown()
 
+def same_stops(saved, original):
+    """Every original field kept; new fields added on load (e.g. other={}) are allowed."""
+    if len(saved) != len(original): return False
+    return all(all(a.get(k) == v for k, v in b.items()) and a.get("other", {}) == b.get("other", {}) for a, b in zip(saved, original))
+
+def sign(app):
+    """Draws a squiggle on the signature pad and saves it."""
+    p = app.page
+    p.wait_for_selector("#sigPad")
+    box = p.locator("#sigPad").bounding_box()
+    p.mouse.move(box["x"] + 30, box["y"] + 100); p.mouse.down()
+    for i in range(1, 12):
+        p.mouse.move(box["x"] + 30 + i * 20, box["y"] + 100 + (25 if i % 2 else -25))
+    p.mouse.up()
+    app.tap('.sheet [data-a="save"]')
+
 checks = {"n": 0, "fail": 0}
 def check(cond, msg):
     checks["n"] += 1

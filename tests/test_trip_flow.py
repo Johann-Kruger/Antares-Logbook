@@ -1,5 +1,5 @@
 """New trip -> log stops with GPS -> day details -> weights -> end trip, and the seeded season survives."""
-from harness import App, check, done, fake_season
+from harness import App, check, done, fake_season, same_stops
 import json
 
 app = App(seed=fake_season())
@@ -8,17 +8,25 @@ check(p.locator("[data-trip]").count() == 2, "seeded trips listed")
 app.tap("#btnNewTrip")
 p.fill("#tTripNo", "9")
 app.tap('[data-a="save"]')
-check(p.locator("#btnLogStop").is_visible(), "new trip opens with LOG STOP")
+# Start of trip: skipper signs, then confirms the crew brought over from the last trip
+from harness import sign
+sign(app)
+check(p.get_by_text("Confirm crew list").count() == 1, "crew list from last trip offered for confirmation")
+app.tap("#btnConfirmCrew"); app.tap('.sheet-backdrop:last-child [data-a="ok"]')
+check(p.locator("#btnLogStop").is_visible(), "trip screen with LOG STOP after confirming crew")
 
-# Log a stop: GPS fills in, fish via buttons
+# Log a stop: weather for the day first, then GPS fills in, fish via buttons
 app.tap("#btnLogStop")
+check(p.get_by_text("Start of the day").count() == 1, "weather asked before the day's first stop")
+app.tap('[data-chips="wxWindDir"] [data-v="SE"]'); app.tap('[data-chips="wxWindKn"] [data-v="15-20"]')
+app.tap('.sheet [data-a="save"]')
 p.wait_for_function("() => document.querySelector('#gpsText') && /°/.test(document.querySelector('#gpsText').textContent)", timeout=15000)
-app.tap('[data-step="alb:10"]'); app.tap('[data-step="alb:10"]'); app.tap('[data-step="alb:1"]')
-app.tap('[data-step="yft:1"]')
+app.tap('[data-step="ALB:10"]'); app.tap('[data-step="ALB:10"]'); app.tap('[data-step="ALB:1"]')
+app.tap('[data-step="YFT:1"]')
 app.tap('[data-chips="tank"] [data-v="3"]')
 p.locator("details.more").first.evaluate("d => d.open = true")
 p.fill("#sSst", "16.8")
-app.tap('[data-chips="windDir"] [data-v="SE"]')
+check(p.locator('[data-chips="windDir"] .chip.on').get_attribute("data-v") == "SE", "stop wind taken from the day's weather")
 app.tap('[data-a="save"]')
 s = app.stored()
 trip = [t for t in s["trips"] if t["tripNumber"] == "9"][0]
@@ -72,6 +80,6 @@ s = app.stored()
 orig = fake_season()
 for t in orig["trips"]:
     got = [x for x in s["trips"] if x["id"] == t["id"]][0]
-    check(got["stops"] == t["stops"] and got["weights"] == t["weights"], "seeded trip %s unchanged" % t["tripNumber"])
+    check(same_stops(got["stops"], t["stops"]) and got["weights"] == t["weights"], "seeded trip %s unchanged" % t["tripNumber"])
 app.close()
 done("test_trip_flow")
