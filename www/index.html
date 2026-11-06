@@ -608,6 +608,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     vessel:"ANTARES", registrationNo:"HTB278", rightsHolder:"Southwest Tuna Fishing Cc",
     rightNo:"TPL21222", permitNo:"2602382", skipper:"Johann Kruger", contact:"083 204 4880",
     email:"johannkruger1@gmail.com", port:"Hout Bay", observer:"N",
+    owner:"Ntoza Fishing (Pty) Ltd", licenceNo:"HTB 278 TP", crewListPort:"Hout Bay Harbour", skipperId:"",
     defaultCrew:"10", defaultHours:"13", gear:"P", liveBait:"N", baitCondition:"", polePct:"100",
     stopSpecies:"ALB,YFT,BET"
   }; }
@@ -629,7 +630,9 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     { k:"foreign", label:"Foreign matter?", yn:"N" }, { k:"parasites", label:"Parasites?", yn:"N" },
     { k:"gutting", label:"Gutting?", yn:"N" }, { k:"washing", label:"Washing?", yn:"Y" }, { k:"offal", label:"Offal discharge hygienic?", yn:"Y" }
   ];
-  var CREW_TEXT = ["name","surname","idNumber","role"];
+  var CREW_TEXT = ["name","surname","idNumber","role","nationality","contact","nextOfKin"];
+  // Positions on the vessel's crew list.
+  var POSITIONS = ["Crew","Fisherman","Rodman","Baitmaster","Cook","Engineer","Observer"];
   var CONDITION_FIELDS = ["sst","windDir","windKn","sea","driftDir","driftKn","schoolDepth","bait"];
 
   // ================= Small helpers =================
@@ -783,6 +786,8 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     var total = list.reduce(function(a,w){ return a+num(w.kg); }, 0);
     return { n:list.length, kg:total, avg:list.length ? total/list.length : 0 };
   }
+  function crewOnly(trip){ return trip.crew.filter(function(c){ return c.role!=="Skipper"; }); }
+  function personsOnBoard(trip){ return crewOnly(trip).length + 1; }
   function tripLabel(trip){ return trip.tripNumber ? "Trip "+trip.tripNumber : "Trip (no number)"; }
   function tripRange(trip){
     var d = tripDates(trip);
@@ -801,7 +806,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     }
     var bait = stops.map(function(x){ return x.bait; }).filter(Boolean);
     return {
-      crew: d.crew || String(trip.crew.length || s.defaultCrew || ""),
+      crew: d.crew || String(trip.crew.length ? personsOnBoard(trip) : (s.defaultCrew || "")),
       hours: d.hours || s.defaultHours || "",
       gear: d.gear || s.gear || "P",
       liveBait: d.liveBait || (bait.length ? "Y" : (s.liveBait || "N")),
@@ -1736,7 +1741,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
 
   // ================= Crew =================
   function renderCrew(trip){
-    setTopbar(tripLabel(trip)+" · Crew", trip.crew.length+" on board");
+    setTopbar(tripLabel(trip)+" · Crew", personsOnBoard(trip)+" on board incl. skipper");
     var el = document.getElementById("screen");
     var html = backButton(tripLabel(trip));
     if(trip.crewConfirmedAt) html += '<div class="card" style="border-color:var(--kelp);"><b style="color:var(--kelp);">✓ Crew list confirmed</b><div class="helptext" style="margin:2px 0 0;">'+esc(fmtDay(todayISO(new Date(trip.crewConfirmedAt))))+' — any change needs confirming again.</div></div>';
@@ -1746,7 +1751,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     if(!trip.crew.length && prevTrip && !trip.ended) html += '<button class="btn btn-ghost" id="btnImportCrew" style="margin-bottom:12px;">⤓ Import crew from '+esc(tripLabel(prevTrip))+' ('+prevTrip.crew.length+')</button>';
     if(!trip.crew.length) html += '<div class="empty"><div class="big">👥</div>No crew on this trip yet.</div>';
     trip.crew.forEach(function(c, i){
-      html += '<div class="lineitem" data-crew="'+c.id+'"><div class="num">'+(i+1)+'</div><div class="meta"><div class="t1">'+esc(c.name+" "+c.surname)+'</div><div class="t2">'+esc(c.role||"Crew")+(c.idNumber?' · '+esc(c.idNumber):'')+'</div></div><div class="chev">›</div></div>';
+      html += '<div class="lineitem" data-crew="'+c.id+'"><div class="num">'+(i+1)+'</div><div class="meta"><div class="t1">'+esc(c.name+" "+c.surname)+'</div><div class="t2">'+esc(c.role||"Crew")+(c.nationality?' · '+esc(c.nationality):'')+(c.idNumber?' · '+esc(c.idNumber):' · <b style="color:var(--yellow)">no ID</b>')+'</div></div><div class="chev">›</div></div>';
     });
     if(trip.crew.length && !trip.crewConfirmedAt && !trip.ended) html += '<button class="btn btn-accent btn-big" id="btnConfirmCrew" style="margin-top:8px;">✓ Confirm crew list ('+trip.crew.length+')</button>';
     el.innerHTML = html;
@@ -1757,7 +1762,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     if(cc) cc.onclick = function(){
       if(lockedGuard(trip)) return;
       var noId = trip.crew.filter(function(c){ return !c.idNumber; }).length;
-      showConfirm("Confirm these "+trip.crew.length+" people as the crew for "+tripLabel(trip)+"?"+(noId?"\n\n"+noId+" without an ID number.":""), "Confirm", "btn-accent", function(){
+      showConfirm("Confirm these "+crewOnly(trip).length+" crew (+ skipper = "+personsOnBoard(trip)+" on board) for "+tripLabel(trip)+"?"+(noId?"\n\n"+noId+" without an ID number.":""), "Confirm", "btn-accent", function(){
         trip.crewConfirmedAt = new Date().toISOString(); saveState(); go("trip"); showToast("Crew list confirmed");
       });
     };
@@ -1767,13 +1772,14 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
   }
   function openCrewSheet(trip, person){
     var isNew = !person;
-    var p = person || { name:"", surname:"", idNumber:"", role:"Crew" };
+    var p = person || { name:"", surname:"", idNumber:"", role:"Crew", nationality:"RSA", contact:"", nextOfKin:"" };
     var known = state.knownCrew.filter(function(k){ return !trip.crew.some(function(c){ return c.name.toLowerCase()===k.name.toLowerCase() && c.surname.toLowerCase()===k.surname.toLowerCase(); }); });
     var html = '<h2>'+(isNew?"Add crew member":"Crew member")+'</h2>'+
       (isNew && known.length ? '<div class="sectionlabel">From earlier trips</div><div class="chiprow" id="knownList">'+known.map(function(k,i){ return '<div class="chip" data-k="'+i+'">'+esc(k.name+" "+k.surname)+'</div>'; }).join("")+'</div><div class="sectionlabel">Or type a new one</div>' : '')+
       '<div class="grid2">'+field("Name", "cName", p.name)+field("Surname", "cSurname", p.surname)+'</div>'+
-      field("ID / passport number", "cId", p.idNumber)+
-      '<div class="sectionlabel">Role</div>'+chips("role", ["Skipper","Crew","Observer"], p.role||"Crew")+
+      '<div class="grid2">'+field("ID / passport number", "cId", p.idNumber)+field("Nationality", "cNat", p.nationality, "text", 'autocapitalize="characters"')+'</div>'+
+      '<div class="grid2">'+field("Contact number", "cTel", p.contact, "tel")+field("Next of kin (name & number)", "cKin", p.nextOfKin)+'</div>'+
+      '<div class="sectionlabel">Position</div>'+chips("role", POSITIONS.concat(p.role && POSITIONS.indexOf(p.role)<0 ? [p.role] : []), p.role||"Crew")+
       '<div class="sheet-foot">'+(isNew?'<button class="btn btn-outline" data-a="cancel">Cancel</button>':'<button class="btn btn-danger" data-a="del">Remove</button>')+'<button class="btn btn-accent" data-a="save">Save</button></div>';
     var sh = openSheet(html);
     wireChips(sh.sheet);
@@ -1781,7 +1787,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     if(kl) kl.addEventListener("click", function(e){
       var c = e.target.closest("[data-k]"); if(!c) return;
       var k = known[int(c.getAttribute("data-k"))];
-      trip.crew.push({ id:uid(), name:k.name, surname:k.surname, idNumber:k.idNumber, role:k.role||"Crew" }); trip.crewConfirmedAt = "";
+      trip.crew.push(Object.assign({}, k, { id:uid(), role:k.role||"Crew" })); trip.crewConfirmedAt = "";
       saveState(); sh.close(); render(); showToast(k.name+" added");
     });
     var cancel = sh.sheet.querySelector('[data-a="cancel"]'); if(cancel) cancel.onclick = sh.close;
@@ -1790,6 +1796,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     sh.sheet.querySelector('[data-a="save"]').onclick = function(){
       var rec = person || { id:uid() };
       rec.name = val(sh.sheet,"cName"); rec.surname = val(sh.sheet,"cSurname"); rec.idNumber = val(sh.sheet,"cId"); rec.role = chipValue(sh.sheet,"role") || "Crew";
+      rec.nationality = val(sh.sheet,"cNat").toUpperCase(); rec.contact = val(sh.sheet,"cTel"); rec.nextOfKin = val(sh.sheet,"cKin");
       if(!rec.name){ showToast("Enter a name", true); return; }
       if(!person) trip.crew.push(rec);
       trip.crewConfirmedAt = "";
@@ -1799,35 +1806,41 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
   }
   function rememberCrew(c){
     var k = state.knownCrew.find(function(x){ return x.name.toLowerCase()===c.name.toLowerCase() && x.surname.toLowerCase()===c.surname.toLowerCase(); });
-    if(k){ if(c.idNumber) k.idNumber = c.idNumber; k.role = c.role; }
-    else state.knownCrew.push({ name:c.name, surname:c.surname, idNumber:c.idNumber, role:c.role });
+    var copy = {}; CREW_TEXT.forEach(function(f){ copy[f] = c[f] || ""; });
+    if(k) CREW_TEXT.forEach(function(f){ if(copy[f]) k[f] = copy[f]; });
+    else state.knownCrew.push(copy);
   }
   function buildCrewPdf(trip){
     if(!window.jspdf){ showToast("PDF library missing", true); return; }
     var s = state.settings;
-    var doc = new window.jspdf.jsPDF({ unit:"mm", format:"a4" });
-    doc.setFont("helvetica","bold"); doc.setFontSize(16); doc.text("CREW LIST", 105, 18, { align:"center" });
+    var doc = new window.jspdf.jsPDF({ unit:"mm", format:"a4", orientation:"landscape" });
+    var W = 297;
+    doc.setFont("helvetica","bold"); doc.setFontSize(15); doc.text("CREW LIST — FV "+String(s.vessel).toUpperCase(), W/2, 15, { align:"center" });
+    doc.setFontSize(10);
+    function kv(x, y, k, v){ doc.setFont("helvetica","bold"); doc.text(k, x, y); var w = doc.getTextWidth(k+" "); doc.setFont("helvetica","normal"); doc.text(String(v||""), x+w, y); return x + w + doc.getTextWidth(String(v||"")) + 8; }
+    var x = kv(14, 25, "Owner/Operator:", s.owner); x = kv(x, 25, "Official/Licence No.:", s.licenceNo); kv(x, 25, "Port:", s.crewListPort || s.port);
+    x = kv(14, 32, "Trip No.:", trip.tripNumber); x = kv(x, 32, "Departure:", fmtDate(trip.sailDate)+(trip.sailTime?", "+trip.sailTime:"")+", "+(s.crewListPort||s.port)); kv(x, 32, "Persons on board (incl. skipper):", String(personsOnBoard(trip)));
+    x = kv(14, 41, "Skipper:", s.skipper); x = kv(x, 41, "ID No.:", s.skipperId); kv(x, 41, "Contact:", s.contact);
+    var cols = [["#",10],["Name",32],["Surname",32],["Nat.",16],["ID / Passport No.",44],["Position",28],["Contact",30],["Next of kin",77]];
+    var y = 48, rh = 9, x0 = 14;
+    x = x0;
+    cols.forEach(function(c){ doc.setFillColor(225,232,230); doc.rect(x, y, c[1], rh, "F"); doc.setDrawColor(150); doc.rect(x, y, c[1], rh); doc.setFont("helvetica","bold"); doc.setFontSize(9); doc.text(c[0], x+2, y+6); x += c[1]; });
+    y += rh;
+    var crew = crewOnly(trip);
+    var n = Math.max(12, crew.length);
+    for(var i=0;i<n;i++){
+      if(y > 185){ doc.addPage(); y = 20; }
+      var c = crew[i];
+      var idText = c ? (c.idNumber || "— (no ID)") : "";
+      var vals = c ? [String(i+1), c.name, c.surname, c.nationality, idText, c.role||"Crew", c.contact, c.nextOfKin] : [String(i+1),"","","","","","",""];
+      x = x0;
+      cols.forEach(function(col, j){ doc.setDrawColor(150); doc.rect(x, y, col[1], rh); doc.setFont("helvetica","normal"); doc.setFontSize(9); doc.text(doc.splitTextToSize(String(vals[j]||""), col[1]-3)[0] || "", x+2, y+6); x += col[1]; });
+      y += rh;
+    }
+    y = Math.min(y + 16, 200);
     doc.setFontSize(10); doc.setFont("helvetica","normal");
-    var info = [
-      ["Vessel", s.vessel], ["Registration", s.registrationNo], ["Rights holder", s.rightsHolder], ["Permit no.", s.permitNo],
-      ["Skipper", s.skipper+(s.contact?"  ("+s.contact+")":"")], ["Departure port", s.port],
-      ["Departure", fmtDate(trip.sailDate)+(trip.sailTime?"  "+trip.sailTime:"")], ["Trip no.", trip.tripNumber||""], ["Persons on board", String(trip.crew.length)]
-    ];
-    var y = 30;
-    info.forEach(function(r){ doc.setFont("helvetica","bold"); doc.text(r[0]+":", 15, y); doc.setFont("helvetica","normal"); doc.text(String(r[1]||""), 55, y); y += 6; });
-    y += 4;
-    var cols = [15, 25, 75, 125, 175];
-    doc.setFillColor(220,228,226); doc.rect(13, y-5, 184, 8, "F");
-    doc.setFont("helvetica","bold"); ["#","Name","Surname","ID / passport no.","Role"].forEach(function(h,i){ doc.text(h, cols[i], y); });
-    doc.setFont("helvetica","normal"); y += 8;
-    trip.crew.forEach(function(c, i){
-      if(y > 270){ doc.addPage(); y = 20; }
-      [String(i+1), c.name, c.surname, c.idNumber, c.role||"Crew"].forEach(function(v,j){ doc.text(String(v||""), cols[j], y); });
-      doc.setDrawColor(200); doc.line(13, y+2, 197, y+2); y += 8;
-    });
-    y = Math.min(y + 16, 280);
-    doc.text("Skipper signature:", 15, y); sigOnPdf(doc, trip, 50, y+1, 45); doc.line(50, y+1, 110, y+1);
-    doc.text("Date: "+(trip.crewConfirmedAt ? fmtDate(todayISO(new Date(trip.crewConfirmedAt))) : "______________"), 125, y);
+    doc.text("Skipper signature:", x0, y); sigOnPdf(doc, trip, x0+34, y+1, 45); doc.line(x0+34, y+1, x0+100, y+1);
+    doc.text("Date: "+(trip.crewConfirmedAt ? fmtDate(todayISO(new Date(trip.crewConfirmedAt))) : "______________"), x0+115, y);
     saveFileOut(fileName(trip, "crew_list", "pdf"), doc.output("blob"));
   }
 
@@ -2047,7 +2060,8 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
   }
   function openSettings(){
     var s = state.settings;
-    var f = [["Vessel name","vessel"],["Vessel reg no.","registrationNo"],["Rights holder","rightsHolder"],["Right application no.","rightNo"],["Permit no.","permitNo"],["Skipper","skipper"],["Skipper contact no.","contact"],["Email","email"],["Discharge port","port"]];
+    var f = [["Vessel name","vessel"],["Vessel reg no. (DFFE form)","registrationNo"],["Rights holder","rightsHolder"],["Right application no.","rightNo"],["Permit no.","permitNo"],["Skipper","skipper"],["Skipper ID no.","skipperId"],["Skipper contact no.","contact"],["Email","email"],["Discharge port","port"],
+      ["Owner/operator (crew list)","owner"],["Official/licence no. (crew list)","licenceNo"],["Port (crew list)","crewListPort"]];
     var sh = openSheet('<h2>Vessel &amp; form details</h2>'+f.map(function(x){ return field(x[0], "set_"+x[1], s[x[1]]); }).join("")+
       '<div class="sectionlabel">Observer on board (default)</div>'+chips("observer", [{code:"N",label:"No"},{code:"Y",label:"Yes"}], s.observer)+
       '<div class="sectionlabel">Defaults for each fishing day</div>'+
