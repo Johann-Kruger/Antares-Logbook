@@ -148,10 +148,14 @@
   .gpsbox.wait .p{ color:var(--yellow); }
   .gpsbox.bad .p{ color:var(--danger); }
 
-  .wsgrid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(86px,1fr)); gap:6px; }
-  .wscell{ background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:8px 6px; text-align:center; cursor:pointer; }
-  .wscell .i{ font-size:11px; color:var(--text-dim); }
-  .wscell .v{ font-size:17px; font-weight:800; }
+  /* Weigh sheet: 10 weights per row, like the paper sheet, with the fish numbers at the start of each row. */
+  .wsrow{ display:grid; grid-template-columns:30px repeat(10, 1fr); gap:3px; margin-bottom:3px; align-items:stretch; }
+  .wsrow .rn{ font-size:10px; color:var(--text-dim); display:flex; align-items:center; justify-content:flex-end; padding-right:3px; line-height:1.1; text-align:right; }
+  .wsrow .rsum{ grid-column:2 / -1; font-size:11px; color:var(--text-dim); text-align:right; margin-top:-1px; }
+  .wscell{ background:var(--surface); border:1px solid var(--line); border-radius:6px; padding:9px 0; min-height:40px; text-align:center; cursor:pointer; display:flex; flex-direction:column; justify-content:center; min-width:0; }
+  .wscell.empty{ background:transparent; border-style:dashed; cursor:default; }
+  .wscell .v{ font-size:13px; font-weight:800; letter-spacing:-.3px; }
+  .wscell .i{ font-size:9px; color:var(--text-dim); }
   .wscell.yf{ border-color:var(--yellow); }
   .wsentry{ display:flex; gap:10px; }
   .wsentry input{ flex:1; min-width:0; font-size:34px; font-weight:800; text-align:center; height:72px; background:var(--surface-2); border:1px solid var(--line); border-radius:12px; color:var(--text); }
@@ -2118,8 +2122,14 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
       var sp = spx.code;
       var list = trip.weights.filter(function(w){ return w.sp===sp; });
       if(!list.length) return;
-      html += '<div class="sectionlabel">'+esc(spx.name)+' ('+list.length+')</div><div class="wsgrid">'+
-        list.map(function(w, i){ return '<div class="wscell'+(sp!=="ALB"?" yf":"")+'" data-w="'+w.id+'"><div class="i">'+(i+1)+'</div><div class="v">'+esc(w.kg)+'</div>'+(w.len?'<div class="i">'+esc(w.len)+' cm</div>':'')+'</div>'; }).join("")+'</div>';
+      html += '<div class="sectionlabel">'+esc(spx.name)+' ('+list.length+' · '+kg(weightStats(trip, sp).kg)+' kg)</div>';
+      for(var r=0; r<list.length; r+=10){
+        var row = list.slice(r, r+10), rowKg = row.reduce(function(a,w){ return a+num(w.kg); }, 0);
+        html += '<div class="wsrow"><div class="rn">'+(r+1)+'–<br>'+(r+10)+'</div>'+
+          row.map(function(w){ return '<div class="wscell'+(sp!=="ALB"?" yf":"")+'" data-w="'+w.id+'"><div class="v">'+esc(w.kg)+'</div>'+(w.len?'<div class="i">'+esc(w.len)+'cm</div>':'')+'</div>'; }).join("")+
+          new Array(10-row.length+1).join('<div class="wscell empty"></div>')+
+          '<div class="rsum">'+kg(rowKg)+' kg</div></div>';
+      }
     });
     el.innerHTML = html;
     wireBack(function(){ go("trip"); });
