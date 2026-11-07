@@ -1542,8 +1542,14 @@
       var sp = spx.code;
       var list = trip.weights.filter(function(w){ return w.sp===sp; });
       if(!list.length) return;
-      html += '<div class="sectionlabel">'+esc(spx.name)+' ('+list.length+')</div><div class="wsgrid">'+
-        list.map(function(w, i){ return '<div class="wscell'+(sp!=="ALB"?" yf":"")+'" data-w="'+w.id+'"><div class="i">'+(i+1)+'</div><div class="v">'+esc(w.kg)+'</div>'+(w.len?'<div class="i">'+esc(w.len)+' cm</div>':'')+'</div>'; }).join("")+'</div>';
+      html += '<div class="sectionlabel">'+esc(spx.name)+' ('+list.length+' · '+kg(weightStats(trip, sp).kg)+' kg)</div>';
+      for(var r=0; r<list.length; r+=10){
+        var row = list.slice(r, r+10), rowKg = row.reduce(function(a,w){ return a+num(w.kg); }, 0);
+        html += '<div class="wsrow"><div class="rn">'+(r+1)+'–<br>'+(r+10)+'</div>'+
+          row.map(function(w){ return '<div class="wscell'+(sp!=="ALB"?" yf":"")+'" data-w="'+w.id+'"><div class="v">'+esc(w.kg)+'</div>'+(w.len?'<div class="i">'+esc(w.len)+'cm</div>':'')+'</div>'; }).join("")+
+          new Array(10-row.length+1).join('<div class="wscell empty"></div>')+
+          '<div class="rsum">'+kg(rowKg)+' kg</div></div>';
+      }
     });
     el.innerHTML = html;
     wireBack(function(){ go("trip"); });

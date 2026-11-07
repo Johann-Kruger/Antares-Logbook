@@ -68,6 +68,7 @@ app.tap('[data-chips="sp"] [data-v="YFT"]')
 p.fill("#wKg", "24.6"); app.tap("#btnAddW")
 trip = [t for t in app.stored()["trips"] if t["tripNumber"] == "9"][0]
 check([w["sp"] for w in trip["weights"]] == ["ALB", "ALB", "ALB", "YFT"], "weights saved with species")
+check(p.locator(".wsrow").count() == 2 and p.locator(".wsrow").first.locator(".wscell").count() == 10 and p.locator(".wsrow").first.locator(".wscell.empty").count() == 7, "weights shown 10 per row")
 app.tap("#btnBack")
 
 # End trip
