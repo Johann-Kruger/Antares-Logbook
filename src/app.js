@@ -34,7 +34,9 @@
     email:"johannkruger1@gmail.com", port:"Hout Bay", observer:"N",
     owner:"Ntoza Fishing (Pty) Ltd", licenceNo:"HTB 278 TP", crewListPort:"Hout Bay Harbour", skipperId:"",
     defaultCrew:"10", defaultHours:"13", gear:"P", liveBait:"N", baitCondition:"", polePct:"100",
-    stopSpecies:"ALB,YFT,BET"
+    stopSpecies:"ALB,YFT,BET",
+    // Pay terms printed on the voyage contract. Blank commission prints as a line to fill in by hand.
+    commLongfin:"", commYellowfin:"", cookDayRate:"150", baitDayRate:"150", payDays:"7"
   }; }
   var SETTINGS_TEXT = Object.keys(defaultSettings());
   var TRIP_TEXT = ["tripNumber","sailDate","sailTime","dischargeDate","notes"];
@@ -55,6 +57,8 @@
     { k:"gutting", label:"Gutting?", yn:"N" }, { k:"washing", label:"Washing?", yn:"Y" }, { k:"offal", label:"Offal discharge hygienic?", yn:"Y" }
   ];
   var CREW_TEXT = ["name","surname","idNumber","role","nationality","contact","kinName","kinContact"];
+  // Crew details printed on the voyage contract; changing one voids the signature.
+  var CONTRACT_FIELDS = ["name","surname","idNumber","contact","kinName","kinContact"];
   // Positions on the vessel's crew list.
   var POSITIONS = ["Crew","Fisherman","Rodman","Baitmaster","Cook","Engineer","Observer"];
   var CONDITION_FIELDS = ["sst","windDir","windKn","sea","driftDir","driftKn","schoolDepth","bait"];
@@ -120,7 +124,13 @@
       if(!trip.id) trip.id = uid();
       trip.ended = !!trip.ended;
       trip.createdAt = typeof trip.createdAt === "number" ? trip.createdAt : Date.now();
-      trip.crew = (Array.isArray(t.crew) ? t.crew : []).filter(isPlainObject).map(function(c){ var x = textFields(splitKin(Object.assign({}, c)), CREW_TEXT); if(!x.id) x.id = uid(); return x; });
+      trip.crew = (Array.isArray(t.crew) ? t.crew : []).filter(isPlainObject).map(function(c){
+        var x = textFields(splitKin(Object.assign({}, c)), CREW_TEXT); if(!x.id) x.id = uid();
+        // Voyage contract signed on the phone by this crew member, for this trip only.
+        x.contractSig = typeof c.contractSig === "string" && /^data:image\/png;base64,/.test(c.contractSig) ? c.contractSig : "";
+        x.contractSignedAt = x.contractSig && typeof c.contractSignedAt === "string" ? c.contractSignedAt : "";
+        return x;
+      });
       trip.stops = (Array.isArray(t.stops) ? t.stops : []).filter(isPlainObject).map(function(p){
         var x = textFields(Object.assign({}, p), STOP_TEXT); if(!x.id) x.id = uid();
         var other = {};
@@ -222,6 +232,9 @@
   }
   function crewOnly(trip){ return trip.crew.filter(function(c){ return c.role!=="Skipper"; }); }
   function personsOnBoard(trip){ return crewOnly(trip).length + 1; }
+  function unsignedContracts(trip){ return crewOnly(trip).filter(function(c){ return !c.contractSig; }); }
+  // A crew member carried over to another trip starts with an unsigned contract.
+  function crewCopy(c){ var x = Object.assign({}, c, { id:uid() }); x.contractSig = ""; x.contractSignedAt = ""; return x; }
   function tripLabel(trip){ return trip.tripNumber ? "Trip "+trip.tripNumber : "Trip (no number)"; }
   function tripRange(trip){
     var d = tripDates(trip);
@@ -461,7 +474,7 @@
       if(clash){ showToast("Trip "+no+" already exists", true); return; }
       if(isNew){
         trip = { id:uid(), createdAt:Date.now(), ended:false, crew:[], stops:[], days:{}, weights:[], haccp:{}, skipperSig:"", crewConfirmedAt:"" };
-        if(last && last.crew.length) trip.crew = last.crew.map(function(c){ return Object.assign({}, c, { id:uid() }); });
+        if(last && last.crew.length) trip.crew = last.crew.map(crewCopy);
         state.trips.push(trip);
       }
       trip.tripNumber = no; trip.sailDate = val(s.sheet,"tSail"); trip.sailTime = val(s.sheet,"tSailTime");
@@ -773,7 +786,7 @@
 
   // ================= Signature pad =================
   // Draw with a finger; saved as a small PNG so it can go on the PDFs.
-  function openSignatureSheet(title, note, onSave){
+  function openSignatureSheet(title, note, onSave, outWidth){
     var sh = openSheet('<h2>'+esc(title)+'</h2>'+(note?'<p class="helptext" style="margin:0 0 8px;">'+esc(note)+'</p>':'')+
       '<canvas id="sigPad" style="width:100%;height:200px;background:#fff;border-radius:12px;touch-action:none;display:block;"></canvas>'+
       '<div class="sheet-foot"><button class="btn btn-outline" data-a="clear">Clear</button><button class="btn btn-outline" data-a="cancel">Cancel</button><button class="btn btn-accent" data-a="save">Save</button></div>');
@@ -795,7 +808,8 @@
     sh.sheet.querySelector('[data-a="save"]').onclick = function(){
       if(!inked){ showToast("Sign in the white box first", true); return; }
       // Downscale to keep the stored image small.
-      var out = document.createElement("canvas"); out.width = 600; out.height = Math.round(600*h/w);
+      var ow = outWidth || 600;
+      var out = document.createElement("canvas"); out.width = ow; out.height = Math.round(ow*h/w);
       out.getContext("2d").drawImage(cv, 0, 0, out.width, out.height);
       var data = out.toDataURL("image/png");
       sh.close(); onSave(data);
@@ -861,6 +875,8 @@
     if(!trip.crew.length) warn.push("No crew list");
     else if(!trip.crewConfirmedAt) warn.push("Crew list not confirmed");
     if(!trip.skipperSig) warn.push("No skipper signature");
+    var unsigned = unsignedContracts(trip);
+    if(unsigned.length) warn.push("Voyage contract not signed by "+unsigned.map(function(c){ return c.name; }).join(", "));
     var noH = tripDates(trip).filter(function(d){ return stopsOn(trip,d).length && !(trip.haccp[d] && trip.haccp[d].doneAt); });
     if(noH.length) warn.push("End-of-day HACCP not done for "+noH.map(fmtDay).join(", "));
     if(!trip.weights.length) warn.push("No offload weights yet (you can add them after ending)");
@@ -1180,18 +1196,22 @@
     var html = backButton(tripLabel(trip));
     if(trip.crewConfirmedAt) html += '<div class="card" style="border-color:var(--kelp);"><b style="color:var(--kelp);">✓ Crew list confirmed</b><div class="helptext" style="margin:2px 0 0;">'+esc(fmtDay(todayISO(new Date(trip.crewConfirmedAt))))+' — any change needs confirming again.</div></div>';
     else if(trip.crew.length) html += '<div class="locked-note"><span>Check the names, add or remove anyone, then confirm.</span></div>';
-    html += '<div class="actions"><button class="btn btn-ghost" id="btnAddCrew">+ Add crew</button><button class="btn btn-ghost" id="btnCrewPdf">📄 Crew list PDF</button></div>';
+    html += '<div class="actions"><button class="btn btn-ghost" id="btnAddCrew">+ Add crew</button><button class="btn btn-ghost" id="btnCrewPdf">📄 Crew list PDF</button>'+
+      '<button class="btn btn-ghost" id="btnContractsPdf">📄 Contracts PDF</button>'+
+      (!trip.ended && unsignedContracts(trip).length ? '<button class="btn btn-ghost" id="btnSignContracts">✍ Sign contracts ('+unsignedContracts(trip).length+')</button>' : '<span></span>')+
+      '</div>';
     var prevTrip = state.trips.filter(function(t){ return t!==trip && t.crew.length; }).sort(function(a,b){ return b.createdAt-a.createdAt; })[0];
     if(!trip.crew.length && prevTrip && !trip.ended) html += '<button class="btn btn-ghost" id="btnImportCrew" style="margin-bottom:12px;">⤓ Import crew from '+esc(tripLabel(prevTrip))+' ('+prevTrip.crew.length+')</button>';
     if(!trip.crew.length) html += '<div class="empty"><div class="big">👥</div>No crew on this trip yet.</div>';
     trip.crew.forEach(function(c, i){
-      html += '<div class="lineitem" data-crew="'+c.id+'"><div class="num">'+(i+1)+'</div><div class="meta"><div class="t1">'+esc(c.name+" "+c.surname)+'</div><div class="t2">'+esc(c.role||"Crew")+(c.nationality?' · '+esc(c.nationality):'')+(c.idNumber?' · '+esc(c.idNumber):' · <b style="color:var(--yellow)">no ID</b>')+'</div></div><div class="chev">›</div></div>';
+      html += '<div class="lineitem" data-crew="'+c.id+'"><div class="num">'+(i+1)+'</div><div class="meta"><div class="t1">'+esc(c.name+" "+c.surname)+'</div><div class="t2">'+esc(c.role||"Crew")+(c.nationality?' · '+esc(c.nationality):'')+(c.idNumber?' · '+esc(c.idNumber):' · <b style="color:var(--yellow)">no ID</b>')+
+        (c.role==="Skipper" ? '' : c.contractSig ? ' · <span style="color:var(--kelp)">contract ✓</span>' : ' · <b style="color:var(--yellow)">contract not signed</b>')+'</div></div><div class="chev">›</div></div>';
     });
     if(trip.crew.length && !trip.crewConfirmedAt && !trip.ended) html += '<button class="btn btn-accent btn-big" id="btnConfirmCrew" style="margin-top:8px;">✓ Confirm crew list ('+trip.crew.length+')</button>';
     el.innerHTML = html;
     wireBack(function(){ go("trip"); });
     var ic = document.getElementById("btnImportCrew");
-    if(ic) ic.onclick = function(){ trip.crew = prevTrip.crew.map(function(c){ return Object.assign({}, c, { id:uid() }); }); trip.crewConfirmedAt = ""; saveState(); render(); };
+    if(ic) ic.onclick = function(){ trip.crew = prevTrip.crew.map(crewCopy); trip.crewConfirmedAt = ""; saveState(); render(); };
     var cc = document.getElementById("btnConfirmCrew");
     if(cc) cc.onclick = function(){
       if(lockedGuard(trip)) return;
@@ -1202,6 +1222,9 @@
     };
     document.getElementById("btnAddCrew").onclick = function(){ if(lockedGuard(trip)) return; openCrewSheet(trip, null); };
     document.getElementById("btnCrewPdf").onclick = function(){ buildCrewPdf(trip); };
+    document.getElementById("btnContractsPdf").onclick = function(){ buildContractsPdf(trip); };
+    var sc = document.getElementById("btnSignContracts");
+    if(sc) sc.onclick = function(){ if(lockedGuard(trip)) return; signContractsInTurn(trip); };
     el.querySelectorAll("[data-crew]").forEach(function(r){ r.onclick = function(){ if(lockedGuard(trip)) return; openCrewSheet(trip, trip.crew.find(function(c){ return c.id===r.getAttribute("data-crew"); })); }; });
   }
   function openCrewSheet(trip, person){
@@ -1215,6 +1238,7 @@
       field("Contact number", "cTel", p.contact, "tel")+
       '<div class="grid2">'+field("Next of kin name", "cKinName", p.kinName)+field("Next of kin number", "cKinTel", p.kinContact, "tel")+'</div>'+
       '<div class="sectionlabel">Position</div>'+chips("role", POSITIONS.concat(p.role && POSITIONS.indexOf(p.role)<0 ? [p.role] : []), p.role||"Crew")+
+      (!isNew && p.role!=="Skipper" ? '<button class="btn btn-ghost" data-a="contract" style="width:100%;margin-top:12px;">📝 Voyage contract — '+(p.contractSig ? 'signed '+esc(fmtDate(todayISO(new Date(p.contractSignedAt))))+'' : 'not signed')+'</button>' : '')+
       '<div class="sheet-foot">'+(isNew?'<button class="btn btn-outline" data-a="cancel">Cancel</button>':'<button class="btn btn-danger" data-a="del">Remove</button>')+'<button class="btn btn-accent" data-a="save">Save</button></div>';
     var sh = openSheet(html);
     wireChips(sh.sheet);
@@ -1228,15 +1252,22 @@
     var cancel = sh.sheet.querySelector('[data-a="cancel"]'); if(cancel) cancel.onclick = sh.close;
     var del = sh.sheet.querySelector('[data-a="del"]');
     if(del) del.onclick = function(){ showConfirm("Remove "+p.name+" "+p.surname+" from this trip?", "Remove", "btn-danger", function(){ trip.crew = trip.crew.filter(function(c){ return c!==person; }); trip.crewConfirmedAt = ""; saveState(); sh.close(); render(); }); };
+    var ct = sh.sheet.querySelector('[data-a="contract"]');
+    if(ct) ct.onclick = function(){ sh.close(); openContractSheet(trip, person); };
     sh.sheet.querySelector('[data-a="save"]').onclick = function(){
-      var rec = person || { id:uid() };
+      var rec = person || { id:uid(), contractSig:"", contractSignedAt:"" };
+      var before = CONTRACT_FIELDS.map(function(f){ return rec[f]||""; }).join("|");
       rec.name = val(sh.sheet,"cName"); rec.surname = val(sh.sheet,"cSurname"); rec.idNumber = val(sh.sheet,"cId"); rec.role = chipValue(sh.sheet,"role") || "Crew";
       rec.nationality = val(sh.sheet,"cNat").toUpperCase(); rec.contact = val(sh.sheet,"cTel"); rec.kinName = val(sh.sheet,"cKinName"); rec.kinContact = val(sh.sheet,"cKinTel");
       if(!rec.name){ showToast("Enter a name", true); return; }
       if(!person) trip.crew.push(rec);
       trip.crewConfirmedAt = "";
+      // The signed contract shows these details, so changing them means signing again.
+      var resign = rec.contractSig && CONTRACT_FIELDS.map(function(f){ return rec[f]||""; }).join("|") !== before;
+      if(resign){ rec.contractSig = ""; rec.contractSignedAt = ""; }
       rememberCrew(rec);
       saveState(); sh.close(); render();
+      if(resign) showToast("Details changed — "+rec.name+" needs to sign the contract again");
     };
   }
   function rememberCrew(c){
@@ -1279,6 +1310,122 @@
     saveFileOut(fileName(trip, "crew_list", "pdf"), doc.output("blob"));
   }
 
+  // ================= Voyage contract =================
+  // The owner's per-trip contract of employment (Antares crew contract), filled
+  // in from the crew list and trip, read and signed by each crew member on the phone.
+  function contractCompany(){ var o = state.settings.owner || ""; return o.replace(/\s*\(pty\)\s*ltd\.?\s*$/i, "").trim() || o; }
+  function titleCase(s){ return String(s||"").toLowerCase().replace(/(^|\s)[a-z]/g, function(c){ return c.toUpperCase(); }); }
+  function contractTerms(){
+    var s = state.settings, co = contractCompany(), port = s.crewListPort || s.port, vessel = titleCase(s.vessel);
+    function r(v){ return v ? v : "_____"; }
+    return {
+      title: co.toUpperCase() + (s.owner.length > co.length ? " "+s.owner.slice(co.length).trim() : ""),
+      subtitle: "VOYAGE CONTRACT OF EMPLOYMENT – Vessel "+vessel,
+      intro: "This is a contract of employment for crew working on the licensed commercial vessel "+vessel+", operated by "+s.owner+". The contract applies to each voyage as defined below.",
+      sections: [
+        ["Contract Duration", "The contract starts on the date the vessel departs "+port+" for the specified trip and ends when the vessel returns, the catch is offloaded, and the vessel is back in sailing condition."],
+        ["Wages and Commission", "Crew are paid per trip as agreed. Commission: R "+r(s.commLongfin)+" / ton Longfin, R "+r(s.commYellowfin)+" / ton Yellowfin. Cook – R"+r(s.cookDayRate)+" per day. Bait master – R"+r(s.baitDayRate)+" per day. Payment is made "+r(s.payDays)+" working days after offload."],
+        ["Notice", "Crew are engaged per trip. The contract ends automatically at the end of the trip."],
+        ["Repatriation", "If the trip ends early, or if a crew member is injured, ill, or otherwise unable to continue, "+co+" will ensure the crew member is safely returned to "+port+" or their place of engagement at no cost to the crew."],
+        ["Injury, Illness, or Death", "If a crew member is injured, falls ill, or dies as a direct result of work on board, "+co+" will cover reasonable medical care while on duty, necessary treatment ashore, and in case of death, transport of remains and reasonable support to the next of kin."],
+        ["Obligations", "Crew agree to follow all lawful instructions given by the skipper or mate for the duration of the voyage."]
+      ]
+    };
+  }
+  function contractParticulars(trip, c){
+    return [["Name", c.name], ["Surname", c.surname], ["I.D./Passport No", c.idNumber], ["Contact No", c.contact],
+      ["Next of Kin & Contact", kinText(c)], ["Trip No", trip.tripNumber], ["Date Commence", fmtDate(trip.sailDate)], ["Date Finish", fmtDate(trip.dischargeDate)]];
+  }
+  function kinText(c){ return [c.kinName, c.kinContact].filter(Boolean).join(" "); }
+  function signedDate(c){ return c.contractSignedAt ? fmtDate(todayISO(new Date(c.contractSignedAt))) : ""; }
+  // next: called after a signature is saved (signing the whole crew in turn).
+  function openContractSheet(trip, c, next){
+    var t = contractTerms();
+    var canSign = !trip.ended && !storageLocked;
+    var missing = [["idNumber","ID / passport number"],["contact","contact number"],["kinName","next of kin name"],["kinContact","next of kin number"]].filter(function(m){ return !c[m[0]]; }).map(function(m){ return m[1]; });
+    var html = '<h2>Voyage contract — '+esc(c.name+" "+c.surname)+'</h2>'+
+      '<p class="helptext" style="margin:0 0 10px;"><b>'+esc(t.title)+'</b><br>'+esc(t.subtitle)+'</p>'+
+      (missing.length ? '<div class="locked-note">Not filled in: '+esc(missing.join(", "))+'. Add it under the crew member before signing.</div>' : '')+
+      '<table class="tbl" style="margin-bottom:12px;">'+contractParticulars(trip, c).map(function(p){ return '<tr><th style="text-align:left;">'+esc(p[0])+'</th><td>'+(p[1] ? esc(p[1]) : '–')+'</td></tr>'; }).join("")+'</table>'+
+      '<p class="sheet-text">'+esc(t.intro)+'</p>'+
+      t.sections.map(function(s){ return '<div class="sectionlabel">'+esc(s[0])+'</div><p class="sheet-text">'+esc(s[1])+'</p>'; }).join("")+
+      (c.contractSig ? '<div class="card" style="border-color:var(--kelp);"><b style="color:var(--kelp);">✓ Signed '+esc(signedDate(c))+'</b><img alt="Signature" src="'+c.contractSig+'" style="display:block;max-width:220px;width:100%;background:#fff;border-radius:8px;margin-top:8px;"></div>' : '')+
+      '<div class="sheet-foot"><button class="btn btn-outline" data-a="close">'+(next ? "Stop" : "Close")+'</button><button class="btn btn-ghost" data-a="pdf">📄 PDF</button>'+
+      (canSign ? '<button class="btn btn-accent" data-a="sign">'+(c.contractSig ? "Sign again" : "✍ Sign")+'</button>' : '')+'</div>';
+    var sh = openSheet(html);
+    sh.sheet.querySelector('[data-a="close"]').onclick = sh.close;
+    sh.sheet.querySelector('[data-a="pdf"]').onclick = function(){ buildContractsPdf(trip, [c]); };
+    var sg = sh.sheet.querySelector('[data-a="sign"]');
+    if(sg) sg.onclick = function(){
+      sh.close();
+      openSignatureSheet("Crew signature", c.name+" "+c.surname+" signs the voyage contract for "+tripLabel(trip)+".", function(data){
+        c.contractSig = data; c.contractSignedAt = new Date().toISOString();
+        saveState(); render(); showToast("Contract signed — "+c.name);
+        if(next) next();
+      }, 400);
+    };
+  }
+  // Pass the phone along the crew: each unsigned contract opens after the last is signed.
+  function signContractsInTurn(trip){
+    function step(){
+      var c = unsignedContracts(trip)[0];
+      if(!c){ showToast("All contracts signed"); return; }
+      openContractSheet(trip, c, step);
+    }
+    step();
+  }
+  function buildContractsPdf(trip, list){
+    if(!window.jspdf){ showToast("PDF library missing", true); return; }
+    list = list || crewOnly(trip);
+    if(!list.length){ showToast("No crew on this trip", true); return; }
+    var t = contractTerms(), s = state.settings;
+    var doc = new window.jspdf.jsPDF({ unit:"mm", format:"a4", orientation:"portrait" });
+    var W = 210, L = 18, R = W-18;
+    function fieldLine(x, y, w, label, value){
+      doc.setFont("helvetica","bold"); doc.setFontSize(10); doc.text(label+":", x, y);
+      var lx = x + doc.getTextWidth(label+": ") + 1;
+      doc.setFont("helvetica","normal"); doc.setFontSize(11);
+      doc.text(doc.splitTextToSize(String(value||""), x+w-lx-1)[0] || "", lx+1, y-0.6);
+      doc.setDrawColor(120); doc.line(lx, y+1, x+w, y+1);
+    }
+    function sigLine(y, label, img, date, under){
+      doc.setFont("helvetica","normal"); doc.setFontSize(10); doc.text(label, L, y);
+      // Date column lines up on both signature rows.
+      var x = L + doc.getTextWidth(label+" ") + 1, w = 45, dx = 140;
+      if(img){ try{ doc.addImage(img, "PNG", x+2, y-w*0.33+2, w, w*0.33); }catch(e){} }
+      doc.setDrawColor(120); doc.line(x, y+1, dx-6, y+1);
+      if(under){ doc.setFontSize(8); doc.text(under, x, y+5); doc.setFontSize(10); }
+      doc.text("Date:", dx, y); doc.setFontSize(11); doc.text(date||"", dx+12, y-0.6); doc.line(dx+11, y+1, R, y+1);
+    }
+    list.forEach(function(c, i){
+      if(i) doc.addPage();
+      var y = 20;
+      doc.setFont("helvetica","bold"); doc.setFontSize(16); doc.text(t.title, W/2, y, { align:"center" });
+      y += 8; doc.setFontSize(12); doc.text(t.subtitle, W/2, y, { align:"center" });
+      y += 9; doc.setFont("helvetica","normal"); doc.setFontSize(10);
+      var lines = doc.splitTextToSize(t.intro, R-L); doc.text(lines, L, y, { lineHeightFactor:1.35 }); y += lines.length*4.8 + 6;
+      var half = (R-L)/2;
+      fieldLine(L, y, half-4, "Name", c.name); fieldLine(L+half, y, half, "Surname", c.surname); y += 9;
+      fieldLine(L, y, half-4, "I.D./Passport No", c.idNumber); fieldLine(L+half, y, half, "Contact No", c.contact); y += 9;
+      fieldLine(L, y, R-L, "Next of Kin & Contact", kinText(c)); y += 9;
+      var third = (R-L)/3;
+      fieldLine(L, y, third-4, "Trip No", trip.tripNumber); fieldLine(L+third, y, third-4, "Date Commence", fmtDate(trip.sailDate)); fieldLine(L+2*third, y, third, "Date Finish", fmtDate(trip.dischargeDate));
+      y += 10;
+      t.sections.forEach(function(sec){
+        y += 4; doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.text(sec[0], L, y); y += 5.5;
+        doc.setFont("helvetica","normal"); doc.setFontSize(10);
+        var ls = doc.splitTextToSize(sec[1], R-L); doc.text(ls, L, y, { lineHeightFactor:1.35 }); y += ls.length*4.8;
+      });
+      y = Math.max(y + 18, 230);
+      sigLine(y, "Signed by Crew:", c.contractSig, signedDate(c), c.name+" "+c.surname);
+      y += 22;
+      sigLine(y, "Signed by Skipper/"+contractCompany()+" Rep:", trip.skipperSig, trip.skipperSig ? signedDate(c) : "", s.skipper);
+      doc.setFontSize(8); doc.setTextColor(120); doc.text(tripLabel(trip)+" · FV "+String(s.vessel).toUpperCase()+" · "+(i+1)+" of "+list.length, W/2, 289, { align:"center" }); doc.setTextColor(0);
+    });
+    var who = list.length===1 ? "contract_"+(list[0].surname || list[0].name).replace(/[^0-9A-Za-z]/g,"") : "crew_contracts";
+    saveFileOut(fileName(trip, who, "pdf"), doc.output("blob"));
+  }
+
   // ================= Reports =================
   function renderReports(trip){
     setTopbar(tripLabel(trip)+" · Reports", tripRange(trip));
@@ -1301,6 +1448,7 @@
       '</div></div>';
     html += '<div class="card"><h2>Other files</h2><div class="sheet-actions">'+
       '<button class="btn btn-ghost" id="btnCrewPdf2">Crew list (PDF)</button>'+
+      '<button class="btn btn-ghost" id="btnContractsPdf2">Voyage contracts (PDF)'+(unsignedContracts(trip).length ? ' — '+unsignedContracts(trip).length+' unsigned' : '')+'</button>'+
       '<button class="btn btn-ghost" id="btnStopsCsv">Stop log (CSV)</button>'+
       '<button class="btn btn-ghost" id="btnWeightsCsv">Weight sheet (CSV)</button>'+
       (trip.skipperSig ? '' : '<button class="btn btn-outline" id="btnSignR">✍ Add skipper signature</button>')+
@@ -1311,6 +1459,7 @@
     document.getElementById("btnStopsCsv").onclick = function(){ saveFileOut(fileName(trip,"stop_log","csv"), new Blob([stopsCsv(trip)], { type:"text/csv" })); };
     document.getElementById("btnWeightsCsv").onclick = function(){ saveFileOut(fileName(trip,"weights","csv"), new Blob([weightsCsv(trip)], { type:"text/csv" })); };
     document.getElementById("btnCrewPdf2").onclick = function(){ buildCrewPdf(trip); };
+    document.getElementById("btnContractsPdf2").onclick = function(){ buildContractsPdf(trip); };
     document.getElementById("btnOffTemps").onclick = function(){ if(storageLocked){ lockedGuard(trip); return; } openOffloadTemps(trip); };
     document.getElementById("btnFishPdf").onclick = function(){ buildFishInspectionPdf(trip); };
     document.getElementById("btnSanPdf").onclick = function(){ buildSanitationPdf(trip); };
@@ -1504,11 +1653,16 @@
       '<div class="sectionlabel">Gear</div>'+chips("gear", ["P","L","P/L"], s.gear)+
       '<div class="sectionlabel">Live bait</div>'+chips("liveBait", [{code:"Y",label:"Yes"},{code:"N",label:"No"}], s.liveBait)+
       field("% pole", "set_polePct", s.polePct, "text", 'inputmode="numeric"')+
+      '<div class="sectionlabel">Voyage contract pay (Rand)</div>'+
+      '<div class="grid2">'+field("Commission / ton Longfin", "set_commLongfin", s.commLongfin, "text", 'inputmode="decimal"')+field("Commission / ton Yellowfin", "set_commYellowfin", s.commYellowfin, "text", 'inputmode="decimal"')+'</div>'+
+      '<div class="grid2">'+field("Cook per day", "set_cookDayRate", s.cookDayRate, "text", 'inputmode="decimal"')+field("Bait master per day", "set_baitDayRate", s.baitDayRate, "text", 'inputmode="decimal"')+'</div>'+
+      field("Paid how many working days after offload", "set_payDays", s.payDays, "text", 'inputmode="numeric"')+
+      '<p class="helptext">Leave commission blank to print a line and write it in by hand.</p>'+
       '<div class="sheet-foot"><button class="btn btn-outline" data-a="cancel">Cancel</button><button class="btn btn-accent" data-a="save">Save</button></div>');
     wireChips(sh.sheet);
     sh.sheet.querySelector('[data-a="cancel"]').onclick = sh.close;
     sh.sheet.querySelector('[data-a="save"]').onclick = function(){
-      f.concat([["","defaultCrew"],["","defaultHours"],["","polePct"]]).forEach(function(x){ s[x[1]] = val(sh.sheet, "set_"+x[1]); });
+      f.concat([["","defaultCrew"],["","defaultHours"],["","polePct"],["","commLongfin"],["","commYellowfin"],["","cookDayRate"],["","baitDayRate"],["","payDays"]]).forEach(function(x){ s[x[1]] = val(sh.sheet, "set_"+x[1]); });
       s.observer = chipValue(sh.sheet,"observer") || "N"; s.gear = chipValue(sh.sheet,"gear") || "P"; s.liveBait = chipValue(sh.sheet,"liveBait") || "N";
       saveState(); sh.close(); render(); showToast("Saved");
     };

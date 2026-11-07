@@ -11,6 +11,8 @@ end of the trip it takes the offload weigh sheet and crew list, and produces:
 - the **DFFE tuna pole and line catch statistics form** (.xlsx, DFFE's own layout)
 - the stop log and weight sheet as CSV
 - the crew list as PDF
+- each crew member's voyage contract (Ntoza Fishing's contract of employment), read and
+  signed on the phone at the start of the trip, as PDF
 
 Everything works offline. Data is stored on the phone (`localStorage`), so make
 regular backups in the app (menu → Backup & restore).
