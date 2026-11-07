@@ -34,7 +34,7 @@
     email:"johannkruger1@gmail.com", port:"Hout Bay", observer:"N",
     owner:"Ntoza Fishing (Pty) Ltd", licenceNo:"HTB 278 TP", crewListPort:"Hout Bay Harbour", skipperId:"",
     defaultCrew:"10", defaultHours:"13", gear:"P", liveBait:"N", baitCondition:"", polePct:"100",
-    stopSpecies:"ALB,YFT,BET"
+    stopSpecies:"ALB,YFT,BET", albRate:"", yftRate:""
   }; }
   var SETTINGS_TEXT = Object.keys(defaultSettings());
   var TRIP_TEXT = ["tripNumber","sailDate","sailTime","dischargeDate","notes"];
@@ -127,6 +127,11 @@
         if(isPlainObject(p.other)) Object.keys(p.other).forEach(function(k){ if(int(p.other[k])>0) other[k] = String(int(p.other[k])); });
         x.other = other;
         return x;
+      });
+      trip.contracts = {};
+      if(isPlainObject(t.contracts)) Object.keys(t.contracts).forEach(function(k){
+        var c = t.contracts[k];
+        if(isPlainObject(c) && typeof c.sig==="string" && /^data:image\/(png|jpeg);base64,/.test(c.sig)) trip.contracts[k] = { sig:c.sig, signedAt:String(c.signedAt||"") };
       });
       trip.crewConfirmedAt = typeof t.crewConfirmedAt === "string" ? t.crewConfirmedAt : "";
       trip.haccp = {};
@@ -396,6 +401,7 @@
     else if(view.screen==="trip") renderTrip(trip);
     else if(view.screen==="weights") renderWeights(trip);
     else if(view.screen==="crew") renderCrew(trip);
+    else if(view.screen==="contracts") renderContracts(trip);
     else if(view.screen==="reports") renderReports(trip);
   }
   function setTopbar(title, sub){
@@ -460,7 +466,7 @@
       var clash = state.trips.find(function(x){ return x!==trip && no && x.tripNumber===no; });
       if(clash){ showToast("Trip "+no+" already exists", true); return; }
       if(isNew){
-        trip = { id:uid(), createdAt:Date.now(), ended:false, crew:[], stops:[], days:{}, weights:[], haccp:{}, skipperSig:"", crewConfirmedAt:"" };
+        trip = { id:uid(), createdAt:Date.now(), ended:false, crew:[], stops:[], days:{}, weights:[], haccp:{}, skipperSig:"", crewConfirmedAt:"", contracts:{} };
         if(last && last.crew.length) trip.crew = last.crew.map(function(c){ return Object.assign({}, c, { id:uid() }); });
         state.trips.push(trip);
       }
@@ -773,7 +779,7 @@
 
   // ================= Signature pad =================
   // Draw with a finger; saved as a small PNG so it can go on the PDFs.
-  function openSignatureSheet(title, note, onSave){
+  function openSignatureSheet(title, note, onSave, outWidth){
     var sh = openSheet('<h2>'+esc(title)+'</h2>'+(note?'<p class="helptext" style="margin:0 0 8px;">'+esc(note)+'</p>':'')+
       '<canvas id="sigPad" style="width:100%;height:200px;background:#fff;border-radius:12px;touch-action:none;display:block;"></canvas>'+
       '<div class="sheet-foot"><button class="btn btn-outline" data-a="clear">Clear</button><button class="btn btn-outline" data-a="cancel">Cancel</button><button class="btn btn-accent" data-a="save">Save</button></div>');
@@ -795,7 +801,8 @@
     sh.sheet.querySelector('[data-a="save"]').onclick = function(){
       if(!inked){ showToast("Sign in the white box first", true); return; }
       // Downscale to keep the stored image small.
-      var out = document.createElement("canvas"); out.width = 600; out.height = Math.round(600*h/w);
+      var ow = outWidth || 600;
+      var out = document.createElement("canvas"); out.width = ow; out.height = Math.round(ow*h/w);
       out.getContext("2d").drawImage(cv, 0, 0, out.width, out.height);
       var data = out.toDataURL("image/png");
       sh.close(); onSave(data);
@@ -863,6 +870,8 @@
     if(!trip.skipperSig) warn.push("No skipper signature");
     var noH = tripDates(trip).filter(function(d){ return stopsOn(trip,d).length && !(trip.haccp[d] && trip.haccp[d].doneAt); });
     if(noH.length) warn.push("End-of-day HACCP not done for "+noH.map(fmtDay).join(", "));
+    var unsigned = crewOnly(trip).filter(function(c){ return !trip.contracts[c.id]; }).length;
+    if(unsigned) warn.push(unsigned+" crew contract(s) not signed");
     if(!trip.weights.length) warn.push("No offload weights yet (you can add them after ending)");
     var noPos = trip.stops.filter(function(st){ return st.lat===""; }).length;
     if(noPos) warn.push(noPos+" stop(s) without a position");
@@ -1187,6 +1196,10 @@
     trip.crew.forEach(function(c, i){
       html += '<div class="lineitem" data-crew="'+c.id+'"><div class="num">'+(i+1)+'</div><div class="meta"><div class="t1">'+esc(c.name+" "+c.surname)+'</div><div class="t2">'+esc(c.role||"Crew")+(c.nationality?' · '+esc(c.nationality):'')+(c.idNumber?' · '+esc(c.idNumber):' · <b style="color:var(--yellow)">no ID</b>')+'</div></div><div class="chev">›</div></div>';
     });
+    if(trip.crewConfirmedAt && crewOnly(trip).length){
+      var signed = crewOnly(trip).filter(function(c){ return trip.contracts[c.id]; }).length;
+      html += '<button class="btn '+(signed===crewOnly(trip).length?'btn-ghost':'btn-accent')+' btn-big" id="btnContracts" style="margin-top:8px;">✍ Contracts ('+signed+' of '+crewOnly(trip).length+' signed)</button>';
+    }
     if(trip.crew.length && !trip.crewConfirmedAt && !trip.ended) html += '<button class="btn btn-accent btn-big" id="btnConfirmCrew" style="margin-top:8px;">✓ Confirm crew list ('+trip.crew.length+')</button>';
     el.innerHTML = html;
     wireBack(function(){ go("trip"); });
@@ -1197,11 +1210,12 @@
       if(lockedGuard(trip)) return;
       var noId = trip.crew.filter(function(c){ return !c.idNumber; }).length;
       showConfirm("Confirm these "+crewOnly(trip).length+" crew (+ skipper = "+personsOnBoard(trip)+" on board) for "+tripLabel(trip)+"?"+(noId?"\n\n"+noId+" without an ID number.":""), "Confirm", "btn-accent", function(){
-        trip.crewConfirmedAt = new Date().toISOString(); saveState(); go("trip"); showToast("Crew list confirmed");
+        trip.crewConfirmedAt = new Date().toISOString(); saveState(); go("contracts"); showToast("Crew list confirmed — now the contracts");
       });
     };
     document.getElementById("btnAddCrew").onclick = function(){ if(lockedGuard(trip)) return; openCrewSheet(trip, null); };
     document.getElementById("btnCrewPdf").onclick = function(){ buildCrewPdf(trip); };
+    var bc = document.getElementById("btnContracts"); if(bc) bc.onclick = function(){ go("contracts"); };
     el.querySelectorAll("[data-crew]").forEach(function(r){ r.onclick = function(){ if(lockedGuard(trip)) return; openCrewSheet(trip, trip.crew.find(function(c){ return c.id===r.getAttribute("data-crew"); })); }; });
   }
   function openCrewSheet(trip, person){
@@ -1279,6 +1293,115 @@
     saveFileOut(fileName(trip, "crew_list", "pdf"), doc.output("blob"));
   }
 
+  // ================= Crew contracts =================
+  // Ntoza Fishing's voyage contract, word for word from the company's form.
+  function contractSections(){
+    var s = state.settings;
+    var rate = function(v){ return v ? String(v) : "_____"; };
+    return [
+      ["Contract Duration", "The contract starts on the date the vessel departs Hout Bay Harbour for the specified trip and ends when the vessel returns, the catch is offloaded, and the vessel is back in sailing condition."],
+      ["Wages and Commission", "Crew are paid per trip as agreed. Commission: R "+rate(s.albRate)+" / ton Longfin, R "+rate(s.yftRate)+" / ton Yellowfin. Cook – R150 per day. Bait master – R150 per day. Payment is made 7 working days after offload."],
+      ["Notice", "Crew are engaged per trip. The contract ends automatically at the end of the trip."],
+      ["Repatriation", "If the trip ends early, or if a crew member is injured, ill, or otherwise unable to continue, Ntoza Fishing will ensure the crew member is safely returned to Hout Bay Harbour or their place of engagement at no cost to the crew."],
+      ["Injury, Illness, or Death", "If a crew member is injured, falls ill, or dies as a direct result of work on board, Ntoza Fishing will cover reasonable medical care while on duty, necessary treatment ashore, and in case of death, transport of remains and reasonable support to the next of kin."],
+      ["Obligations", "Crew agree to follow all lawful instructions given by the skipper or mate for the duration of the voyage."]
+    ];
+  }
+  var CONTRACT_INTRO = "This is a contract of employment for crew working on the licensed commercial vessel Antares, operated by Ntoza Fishing (Pty) Ltd. The contract applies to each voyage as defined below.";
+  function renderContracts(trip){
+    var crew = crewOnly(trip);
+    var signed = crew.filter(function(c){ return trip.contracts[c.id]; }).length;
+    setTopbar(tripLabel(trip)+" · Contracts", signed+" of "+crew.length+" signed");
+    var el = document.getElementById("screen");
+    var html = backButton("Crew");
+    if(!trip.skipperSig) html += '<div class="locked-note"><span>Skipper hasn\'t signed for this trip yet.</span><button class="btn btn-sm" id="btnSignSk">Sign</button></div>';
+    html += '<p class="helptext" style="margin:0 0 10px;">Tap a name, let them read the contract, then hand them the phone to sign.</p>';
+    crew.forEach(function(c, i){
+      var k = trip.contracts[c.id];
+      html += '<div class="lineitem" data-con="'+c.id+'"><div class="num">'+(i+1)+'</div><div class="meta"><div class="t1">'+esc(c.name+" "+c.surname)+'</div>'+
+        '<div class="t2">'+(k ? '<span class="tag open">SIGNED</span> '+esc(fmtDay(todayISO(new Date(k.signedAt)))) : '<b style="color:var(--yellow)">Not signed</b>')+'</div></div><div class="chev">›</div></div>';
+    });
+    html += '<button class="btn btn-ghost" id="btnAllContracts" style="margin-top:6px;">📄 All contracts (PDF)</button>';
+    el.innerHTML = html;
+    wireBack(function(){ go("crew"); });
+    var ss = document.getElementById("btnSignSk"); if(ss) ss.onclick = function(){ captureSkipperSig(trip); };
+    document.getElementById("btnAllContracts").onclick = function(){ buildContractsPdf(trip, null); };
+    el.querySelectorAll("[data-con]").forEach(function(r){ r.onclick = function(){ openContractSheet(trip, trip.crew.find(function(c){ return c.id===r.getAttribute("data-con"); })); }; });
+  }
+  function openContractSheet(trip, c){
+    var k = trip.contracts[c.id];
+    var html = '<h2>Voyage contract — '+esc(c.name+" "+c.surname)+'</h2>'+
+      '<table class="tbl">'+
+        [["Name", c.name],["Surname", c.surname],["ID / Passport", c.idNumber||"—"],["Contact", c.contact||"—"],["Next of kin", ((c.kinName||"")+" "+(c.kinContact||"")).trim()||"—"],
+         ["Trip no.", trip.tripNumber||"—"],["Commences", fmtDate(trip.sailDate)],["Finishes", trip.dischargeDate ? fmtDate(trip.dischargeDate) : "end of trip"]]
+        .map(function(r){ return '<tr><th>'+esc(r[0])+'</th><td>'+esc(r[1])+'</td></tr>'; }).join("")+'</table>'+
+      '<p class="sheet-text" style="margin-top:12px;font-size:15px;">'+esc(CONTRACT_INTRO)+'</p>'+
+      contractSections().map(function(x){ return '<p class="sheet-text" style="font-size:15px;"><b>'+esc(x[0])+'</b>\n'+esc(x[1])+'</p>'; }).join("")+
+      (k ? '<div class="card" style="background:#fff;"><img src="'+k.sig+'" style="width:100%;max-width:320px;display:block;"></div><p class="helptext">Signed '+esc(fmtDay(todayISO(new Date(k.signedAt))))+'</p>' : '')+
+      '<div class="sheet-foot"><button class="btn btn-outline" data-a="pdf">PDF</button>'+
+      (trip.ended ? '' : '<button class="btn btn-accent" data-a="sign">'+(k?"Sign again":"Crew signs")+'</button>')+'</div>';
+    var sh = openSheet(html);
+    sh.sheet.querySelector('[data-a="pdf"]').onclick = function(){ buildContractsPdf(trip, [c]); };
+    var sg = sh.sheet.querySelector('[data-a="sign"]');
+    if(sg) sg.onclick = function(){
+      if(lockedGuard(trip)) return;
+      sh.close();
+      openSignatureSheet(c.name+" "+c.surname+" — sign here", "I have read and agree to the voyage contract for "+tripLabel(trip)+".", function(data){
+        trip.contracts[c.id] = { sig:data, signedAt:new Date().toISOString() };
+        if(saveState()) showToast(c.name+" signed");
+        render();
+      }, 360);
+    };
+  }
+  function buildContractsPdf(trip, only){
+    if(!window.jspdf){ showToast("PDF library missing", true); return; }
+    var crew = only || crewOnly(trip);
+    if(!crew.length){ showToast("No crew on this trip", true); return; }
+    var doc = new window.jspdf.jsPDF({ unit:"mm", format:"a4" });
+    var L = 20, W = 170;
+    crew.forEach(function(c, idx){
+      if(idx) doc.addPage();
+      var y = 22;
+      doc.setFont("helvetica","bold"); doc.setFontSize(15); doc.text(String(state.settings.owner||"NTOZA FISHING (Pty) Ltd").toUpperCase(), 105, y, { align:"center" }); y += 8;
+      doc.setFontSize(12); doc.text("VOYAGE CONTRACT OF EMPLOYMENT – Vessel Antares", 105, y, { align:"center" }); y += 10;
+      doc.setFont("helvetica","normal"); doc.setFontSize(10);
+      function para(t){ var l = doc.splitTextToSize(t, W); doc.text(l, L, y); y += l.length*4.6 + 3; }
+      function heading(t){ doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.text(t, L, y); y += 5.5; doc.setFont("helvetica","normal"); doc.setFontSize(10); }
+      function fieldLine(pairs){
+        var x = L;
+        pairs.forEach(function(pr){
+          doc.setFont("helvetica","normal"); doc.text(pr[0]+":", x, y); x += doc.getTextWidth(pr[0]+": ");
+          doc.setFont("helvetica","bold"); doc.text(String(pr[1]||""), x+1, y-0.6);
+          doc.setDrawColor(90); doc.line(x, y+1, x+pr[2], y+1); x += pr[2]+6;
+        });
+        doc.setFont("helvetica","normal"); y += 9;
+      }
+      para(CONTRACT_INTRO);
+      var secs = contractSections();
+      heading(secs[0][0]); para(secs[0][1]);
+      y += 2;
+      fieldLine([["Name", c.name, 52],["Surname", c.surname, 60]]);
+      fieldLine([["I.D./Passport No", c.idNumber, 45],["Contact No", c.contact, 45]]);
+      fieldLine([["Next of Kin & Contact", ((c.kinName||"")+"  "+(c.kinContact||"")).trim(), 120]]);
+      fieldLine([["Trip No", trip.tripNumber, 18],["Date Commence", fmtDate(trip.sailDate), 24],["Date Finish", trip.ended && trip.dischargeDate ? fmtDate(trip.dischargeDate) : "", 24]]);
+      y += 2;
+      secs.slice(1).forEach(function(x){ heading(x[0]); para(x[1]); });
+      y += 10;
+      var k = trip.contracts[c.id];
+      doc.text("Signed by Crew:", L, y);
+      if(k){ try{ doc.addImage(k.sig, "PNG", L+30, y-13, 45, 15); }catch(e){} }
+      doc.line(L+30, y+1, L+95, y+1);
+      doc.text("Date: "+(k ? fmtDate(todayISO(new Date(k.signedAt))) : ""), L+105, y); doc.line(L+115, y+1, L+150, y+1);
+      y += 18;
+      doc.text("Signed by Skipper/Ntoza Fishing Rep:", L, y);
+      sigOnPdf(doc, trip, L+64, y+1, 40); doc.line(L+64, y+1, L+110, y+1);
+      doc.text("Date: "+(k ? fmtDate(todayISO(new Date(k.signedAt))) : ""), L+115, y); doc.line(L+125, y+1, L+160, y+1);
+      doc.setFontSize(9); doc.text(state.settings.skipper, L+64, y+5);
+    });
+    var who = crew.length===1 ? "_"+(crew[0].surname||crew[0].name).replace(/[^A-Za-z0-9]/g,"") : "";
+    saveFileOut(fileName(trip, "crew_contract"+(crew.length===1?"":"s")+who, "pdf"), doc.output("blob"));
+  }
+
   // ================= Reports =================
   function renderReports(trip){
     setTopbar(tripLabel(trip)+" · Reports", tripRange(trip));
@@ -1301,6 +1424,7 @@
       '</div></div>';
     html += '<div class="card"><h2>Other files</h2><div class="sheet-actions">'+
       '<button class="btn btn-ghost" id="btnCrewPdf2">Crew list (PDF)</button>'+
+      '<button class="btn btn-ghost" id="btnContractsPdf">Crew contracts (PDF)</button>'+
       '<button class="btn btn-ghost" id="btnStopsCsv">Stop log (CSV)</button>'+
       '<button class="btn btn-ghost" id="btnWeightsCsv">Weight sheet (CSV)</button>'+
       (trip.skipperSig ? '' : '<button class="btn btn-outline" id="btnSignR">✍ Add skipper signature</button>')+
@@ -1311,6 +1435,7 @@
     document.getElementById("btnStopsCsv").onclick = function(){ saveFileOut(fileName(trip,"stop_log","csv"), new Blob([stopsCsv(trip)], { type:"text/csv" })); };
     document.getElementById("btnWeightsCsv").onclick = function(){ saveFileOut(fileName(trip,"weights","csv"), new Blob([weightsCsv(trip)], { type:"text/csv" })); };
     document.getElementById("btnCrewPdf2").onclick = function(){ buildCrewPdf(trip); };
+    document.getElementById("btnContractsPdf").onclick = function(){ buildContractsPdf(trip, null); };
     document.getElementById("btnOffTemps").onclick = function(){ if(storageLocked){ lockedGuard(trip); return; } openOffloadTemps(trip); };
     document.getElementById("btnFishPdf").onclick = function(){ buildFishInspectionPdf(trip); };
     document.getElementById("btnSanPdf").onclick = function(){ buildSanitationPdf(trip); };
@@ -1496,7 +1621,8 @@
   function openSettings(){
     var s = state.settings;
     var f = [["Vessel name","vessel"],["Vessel reg no. (DFFE form)","registrationNo"],["Rights holder","rightsHolder"],["Right application no.","rightNo"],["Permit no.","permitNo"],["Skipper","skipper"],["Skipper ID no.","skipperId"],["Skipper contact no.","contact"],["Email","email"],["Discharge port","port"],
-      ["Owner/operator (crew list)","owner"],["Official/licence no. (crew list)","licenceNo"],["Port (crew list)","crewListPort"]];
+      ["Owner/operator (crew list)","owner"],["Official/licence no. (crew list)","licenceNo"],["Port (crew list)","crewListPort"],
+      ["Commission R/ton longfin (contract)","albRate"],["Commission R/ton yellowfin (contract)","yftRate"]];
     var sh = openSheet('<h2>Vessel &amp; form details</h2>'+f.map(function(x){ return field(x[0], "set_"+x[1], s[x[1]]); }).join("")+
       '<div class="sectionlabel">Observer on board (default)</div>'+chips("observer", [{code:"N",label:"No"},{code:"Y",label:"Yes"}], s.observer)+
       '<div class="sectionlabel">Defaults for each fishing day</div>'+
@@ -1566,6 +1692,7 @@
   // ================= Back button, theme, start =================
   function handleBack(){
     if(openSheets.length){ tryClose(openSheets[openSheets.length-1]); return; }
+    if(view.screen==="contracts"){ go("crew"); return; }
     if(view.screen==="weights" || view.screen==="crew" || view.screen==="reports"){ go("trip"); return; }
     if(view.screen==="trip"){ go("trips", null); return; }
     showConfirm("Close the logbook?", "Close", "btn-accent", function(){
