@@ -9,8 +9,10 @@ app.tap("#btnNewTrip")
 p.fill("#tTripNo", "9")
 app.tap('[data-a="save"]')
 # Start of trip: skipper signs, then confirms the crew brought over from the last trip
-from harness import sign
+from harness import sign, to_crew
 sign(app)
+check(p.locator(".sheet h2").last.inner_text() == "Departure check", "departure check comes first")
+to_crew(app)
 check(p.get_by_text("Confirm crew list").count() == 1, "crew list from last trip offered for confirmation")
 app.tap("#btnConfirmCrew"); app.tap('.sheet-backdrop:last-child [data-a="ok"]')
 check(p.locator("#btnAllContracts").count() == 1, "confirming crew leads to the contracts")

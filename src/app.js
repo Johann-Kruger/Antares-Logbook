@@ -487,7 +487,7 @@
       if(!isNew){ render(); return; }
       // Start of trip: skipper signs once, then checks the crew list.
       view.tripId = trip.id;
-      captureSkipperSig(trip, function(){ go("crew", trip.id); });
+      captureSkipperSig(trip, function(){ go("trip", trip.id); openDepartureSheet(trip); });
     };
   }
 
@@ -609,10 +609,9 @@
       var crew = crewOnly(trip);
       var signed = crew.filter(function(c){ return trip.contracts[c.id]; }).length;
       return [
+        { key:"departure", label:"Departure check (bait, VMS, permit, fuel, water, RSW, FCO)", short:"Departure check", done: !!trip.departure.doneAt, sub: trip.departure.doneAt ? "done "+fmtTime(trip.departure.doneAt) : (trip.departure.fcoAt ? "FCO notified" : "") },
         { key:"crew", label:"Crew list", short:"Crew list", done: !!(trip.crewConfirmedAt && trip.crew.length), sub: trip.crew.length ? personsOnBoard(trip)+" on board incl. skipper"+(trip.crewConfirmedAt?"":" — not confirmed") : "" },
-        { key:"contracts", label:"Crew contracts signed", short:"Contracts", done: !!trip.crewConfirmedAt && signed===crew.length, sub: crew.length ? signed+" of "+crew.length+" signed" : "" },
-        { key:"bait", label:"Bait on board", short:"Bait on board", done: baitLoaded(trip), sub: baitLoaded(trip) ? baitSum(trip,"load")+" boxes loaded" : "" },
-        { key:"departure", label:"Departure check (VMS, permit, fuel, water, RSW, FCO)", short:"Departure check", done: !!trip.departure.doneAt, sub: trip.departure.doneAt ? "done "+fmtTime(trip.departure.doneAt) : (trip.departure.fcoAt ? "FCO notified" : "") }
+        { key:"contracts", label:"Crew contracts signed", short:"Contracts", done: !!trip.crewConfirmedAt && signed===crew.length, sub: crew.length ? signed+" of "+crew.length+" signed" : "" }
       ];
     }
     var offDone = Object.keys(trip.haccp).length>0 && Object.keys(trip.haccp).every(function(d){ return trip.haccp[d].fish.every(function(f){ return f.tOff; }); });
@@ -627,7 +626,7 @@
   function runStep(trip, key){
     if(key==="crew") go("crew");
     else if(key==="contracts") go("contracts");
-    else if(key==="bait") openBaitLoadSheet(trip);
+    else if(key==="bait") openDepartureSheet(trip);
     else if(key==="departure") openDepartureSheet(trip);
     else if(key==="landing") openLandingSheet(trip);
     else if(key==="offtemps") openOffloadTemps(trip);
@@ -656,7 +655,6 @@
       else trip.bait.entries.push({ id:uid(), type:"load", date: trip.sailDate || todayISO(), boxes:String(n), note:"" });
       trip.bait.boxKg = val(sh.sheet,"bKg"); trip.bait.baitType = val(sh.sheet,"bType");
       saveState(); sh.close(); render(); showToast(n+" boxes of bait on board");
-      if(!trip.departure.doneAt) openDepartureSheet(trip);
     };
   }
   function openBaitReceivedSheet(trip){
@@ -705,7 +703,8 @@
       "Skipper: "+s.skipper+" "+s.contact,
       "Departing: "+(s.crewListPort||s.port)+", "+fmtDate(trip.sailDate)+(trip.sailTime?" "+trip.sailTime:""),
       "Trip no.: "+(trip.tripNumber||"—"),
-      "Persons on board: "+personsOnBoard(trip)+" (incl. skipper)",
+      "Persons on board: "+personsOnBoard(trip)+" (incl. skipper)"+(trip.crewConfirmedAt ? "" : " — crew list not yet confirmed"),
+      "Bait on board: "+(baitSum(trip,"load") ? baitSum(trip,"load")+" boxes"+(trip.bait.baitType?" "+trip.bait.baitType:"") : "—"),
       "VMS: "+(dep.vmsOnAt ? "on and transmitting"+(dep.vmsConfirmedAt?", position confirmed":"") : "—"),
       "Fishing area: "+(s.fishingArea||"—")].join("\n");
   }
@@ -752,11 +751,23 @@
   function openDepartureSheet(trip){
     if(lockedGuard(trip)) return;
     var d = Object.assign({}, trip.departure);
+    var load0 = trip.bait.entries.find(function(e){ return e.type==="load"; });
+    var bait = { boxes: load0 ? load0.boxes : "", kg: trip.bait.boxKg, type: trip.bait.baitType };
+    // Bait loaded is kept as the trip's "load" entry so the balance works from it.
+    function saveBait(){
+      var load = trip.bait.entries.find(function(e){ return e.type==="load"; });
+      var n = num(bait.boxes);
+      if(n>0){ if(load) load.boxes = String(n); else trip.bait.entries.push({ id:uid(), type:"load", date: trip.sailDate || todayISO(), boxes:String(n), note:"" }); }
+      else if(load && bait.boxes==="") trip.bait.entries = trip.bait.entries.filter(function(e){ return e!==load; });
+      trip.bait.boxKg = bait.kg; trip.bait.baitType = bait.type;
+    }
     var sh = openSheet('<h2>Departure check</h2><div id="depBody"></div>'+
       '<div class="sheet-foot"><button class="btn btn-outline" data-a="cancel">Close</button><button class="btn btn-accent" data-a="done">Ready to sail</button></div>');
     var root = sh.sheet;
     function body(){
       root.querySelector("#depBody").innerHTML =
+        '<div class="sectionlabel">Bait on board</div>'+
+        '<div class="grid3">'+field("Boxes", "dBaitBoxes", bait.boxes, "text", 'inputmode="numeric"')+field("kg per box", "dBaitKg", bait.kg, "text", 'inputmode="decimal"')+field("Bait type", "dBaitType", bait.type, "text", 'placeholder="pilchard"')+'</div>'+
         '<div class="sectionlabel">VMS</div>'+
         tick("vmsOnAt", "VMS on and transmitting", d.vmsOnAt)+
         tick("vmsConfirmedAt", "VMS position checked / confirmed", d.vmsConfirmedAt, state.settings.vmsProvider ? "with "+state.settings.vmsProvider : "")+
@@ -771,28 +782,34 @@
         noticeButtons()+
         field("Reference / who you spoke to (optional)", "dRef", d.fcoRef);
     }
-    function grab(){ d.vmsHow = val(root,"dVmsHow"); d.rswTemp = val(root,"dRsw"); d.fuel = val(root,"dFuel"); d.water = val(root,"dWater"); d.fcoRef = val(root,"dRef"); }
+    function grab(){ bait.boxes = val(root,"dBaitBoxes"); bait.kg = val(root,"dBaitKg"); bait.type = val(root,"dBaitType"); d.vmsHow = val(root,"dVmsHow"); d.rswTemp = val(root,"dRsw"); d.fuel = val(root,"dFuel"); d.water = val(root,"dWater"); d.fcoRef = val(root,"dRef"); }
     body();
+    root.addEventListener("change", function(e){ if(/^dBait/.test(e.target.id)){ grab(); saveBait(); saveState(); var pre = root.querySelector("pre"); if(pre) pre.textContent = departureMessage(Object.assign({}, trip, { departure:d })); } });
     root.addEventListener("click", function(e){
       var t = e.target.closest("[data-tick]");
       if(t){ grab(); var k = t.getAttribute("data-tick"); d[k] = d[k] ? "" : new Date().toISOString(); body(); return; }
       var b = e.target.closest("[data-send]");
       if(b){
-        grab();
+        grab(); saveBait();
         var how = b.getAttribute("data-send");
         sendNotice(how, "Departure notification – FV "+state.settings.vessel+" – "+fmtDate(trip.sailDate), departureMessage(Object.assign({}, trip, { departure:d })));
         d.fcoAt = new Date().toISOString(); d.fcoHow = how;
-        trip.departure = textFields(Object.assign({}, d), DEP_TEXT); saveState(); body();
+        saveBait(); trip.departure = textFields(Object.assign({}, d), DEP_TEXT); saveState(); body();
       }
     });
-    function save(){ grab(); trip.departure = textFields(Object.assign({}, d), DEP_TEXT); saveState(); }
+    function save(){ grab(); saveBait(); trip.departure = textFields(Object.assign({}, d), DEP_TEXT); saveState(); }
     root.querySelector('[data-a="cancel"]').onclick = function(){ save(); sh.close(); render(); };
     root.querySelector('[data-a="done"]').onclick = function(){
       grab();
       var missing = [];
+      if(!(num(bait.boxes)>0)) missing.push("bait on board");
       if(!d.vmsOnAt) missing.push("VMS on"); if(!d.vmsConfirmedAt) missing.push("VMS confirmed"); if(!d.permitAt) missing.push("permit on board");
       if(!d.rswAt) missing.push("RSW running"); if(!d.fuel) missing.push("fuel"); if(!d.water) missing.push("water"); if(!d.fcoAt) missing.push("FCO notified");
-      function finish(){ d.doneAt = new Date().toISOString(); trip.departure = textFields(Object.assign({}, d), DEP_TEXT); saveState(); sh.close(); render(); showToast("Departure check done — safe trip"); }
+      function finish(){
+        d.doneAt = new Date().toISOString(); saveBait(); trip.departure = textFields(Object.assign({}, d), DEP_TEXT); saveState(); sh.close();
+        if(!trip.crewConfirmedAt){ go("crew"); showToast("Departure check done — now the crew list"); }
+        else { render(); showToast("Departure check done — safe trip"); }
+      }
       if(missing.length) showConfirm("Not done yet: "+missing.join(", ")+".\n\nSail anyway?", "Sail anyway", "btn-danger", finish); else finish();
     };
   }
@@ -1760,9 +1777,9 @@
         trip.contracts[c.id] = { sig:data, signedAt:new Date().toISOString() };
         if(saveState()) showToast(c.name+" signed");
         var crew = crewOnly(trip);
-        if(crew.every(function(x){ return trip.contracts[x.id]; }) && !baitLoaded(trip)){
-          // Everyone has signed: on to the bait.
-          go("trip"); openBaitLoadSheet(trip);
+        if(crew.every(function(x){ return trip.contracts[x.id]; })){
+          // Everyone has signed: back to the trip, ready to fish.
+          go("trip"); showToast("All contracts signed — ready to fish");
         } else render();
       }, 360);
     };
