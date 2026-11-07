@@ -34,7 +34,7 @@
     email:"johannkruger1@gmail.com", port:"Hout Bay", observer:"N",
     owner:"Ntoza Fishing (Pty) Ltd", licenceNo:"HTB 278 TP", crewListPort:"Hout Bay Harbour", skipperId:"",
     defaultCrew:"10", defaultHours:"13", gear:"P", liveBait:"N", baitCondition:"", polePct:"100",
-    stopSpecies:"ALB,YFT,BET", albRate:"", yftRate:""
+    stopSpecies:"ALB,YFT,BET"
   }; }
   var SETTINGS_TEXT = Object.keys(defaultSettings());
   var TRIP_TEXT = ["tripNumber","sailDate","sailTime","dischargeDate","notes"];
@@ -54,7 +54,7 @@
     { k:"foreign", label:"Foreign matter?", yn:"N" }, { k:"parasites", label:"Parasites?", yn:"N" },
     { k:"gutting", label:"Gutting?", yn:"N" }, { k:"washing", label:"Washing?", yn:"Y" }, { k:"offal", label:"Offal discharge hygienic?", yn:"Y" }
   ];
-  var CREW_TEXT = ["name","surname","idNumber","role","nationality","contact","kinName","kinContact"];
+  var CREW_TEXT = ["name","surname","idNumber","role","nationality","contact","kinName","kinContact","albRate","yftRate"];
   // Positions on the vessel's crew list.
   var POSITIONS = ["Crew","Fisherman","Rodman","Baitmaster","Cook","Engineer","Observer"];
   var CONDITION_FIELDS = ["sst","windDir","windKn","sea","driftDir","driftKn","schoolDepth","bait"];
@@ -1228,6 +1228,8 @@
       '<div class="grid2">'+field("ID / passport number", "cId", p.idNumber)+field("Nationality", "cNat", p.nationality, "text", 'autocapitalize="characters"')+'</div>'+
       field("Contact number", "cTel", p.contact, "tel")+
       '<div class="grid2">'+field("Next of kin name", "cKinName", p.kinName)+field("Next of kin number", "cKinTel", p.kinContact, "tel")+'</div>'+
+      '<div class="sectionlabel">Commission for the contract (not on the crew list)</div>'+
+      '<div class="grid2">'+field("Longfin R / ton", "cAlbRate", p.albRate, "text", 'inputmode="decimal"')+field("Yellowfin R / ton", "cYftRate", p.yftRate, "text", 'inputmode="decimal"')+'</div>'+
       '<div class="sectionlabel">Position</div>'+chips("role", POSITIONS.concat(p.role && POSITIONS.indexOf(p.role)<0 ? [p.role] : []), p.role||"Crew")+
       '<div class="sheet-foot">'+(isNew?'<button class="btn btn-outline" data-a="cancel">Cancel</button>':'<button class="btn btn-danger" data-a="del">Remove</button>')+'<button class="btn btn-accent" data-a="save">Save</button></div>';
     var sh = openSheet(html);
@@ -1246,6 +1248,7 @@
       var rec = person || { id:uid() };
       rec.name = val(sh.sheet,"cName"); rec.surname = val(sh.sheet,"cSurname"); rec.idNumber = val(sh.sheet,"cId"); rec.role = chipValue(sh.sheet,"role") || "Crew";
       rec.nationality = val(sh.sheet,"cNat").toUpperCase(); rec.contact = val(sh.sheet,"cTel"); rec.kinName = val(sh.sheet,"cKinName"); rec.kinContact = val(sh.sheet,"cKinTel");
+      rec.albRate = val(sh.sheet,"cAlbRate"); rec.yftRate = val(sh.sheet,"cYftRate");
       if(!rec.name){ showToast("Enter a name", true); return; }
       if(!person) trip.crew.push(rec);
       trip.crewConfirmedAt = "";
@@ -1295,12 +1298,12 @@
 
   // ================= Crew contracts =================
   // Ntoza Fishing's voyage contract, word for word from the company's form.
-  function contractSections(){
-    var s = state.settings;
+  var CONTRACT_FINISH = "On completion of offload";
+  function contractSections(c){
     var rate = function(v){ return v ? String(v) : "_____"; };
     return [
       ["Contract Duration", "The contract starts on the date the vessel departs Hout Bay Harbour for the specified trip and ends when the vessel returns, the catch is offloaded, and the vessel is back in sailing condition."],
-      ["Wages and Commission", "Crew are paid per trip as agreed. Commission: R "+rate(s.albRate)+" / ton Longfin, R "+rate(s.yftRate)+" / ton Yellowfin. Cook – R150 per day. Bait master – R150 per day. Payment is made 7 working days after offload."],
+      ["Wages and Commission", "Crew are paid per trip as agreed. Commission: R "+rate(c.albRate)+" / ton Longfin, R "+rate(c.yftRate)+" / ton Yellowfin. Cook – R150 per day. Bait master – R150 per day. Payment is made 7 working days after offload."],
       ["Notice", "Crew are engaged per trip. The contract ends automatically at the end of the trip."],
       ["Repatriation", "If the trip ends early, or if a crew member is injured, ill, or otherwise unable to continue, Ntoza Fishing will ensure the crew member is safely returned to Hout Bay Harbour or their place of engagement at no cost to the crew."],
       ["Injury, Illness, or Death", "If a crew member is injured, falls ill, or dies as a direct result of work on board, Ntoza Fishing will cover reasonable medical care while on duty, necessary treatment ashore, and in case of death, transport of remains and reasonable support to the next of kin."],
@@ -1333,10 +1336,11 @@
     var html = '<h2>Voyage contract — '+esc(c.name+" "+c.surname)+'</h2>'+
       '<table class="tbl">'+
         [["Name", c.name],["Surname", c.surname],["ID / Passport", c.idNumber||"—"],["Contact", c.contact||"—"],["Next of kin", ((c.kinName||"")+" "+(c.kinContact||"")).trim()||"—"],
-         ["Trip no.", trip.tripNumber||"—"],["Commences", fmtDate(trip.sailDate)],["Finishes", trip.dischargeDate ? fmtDate(trip.dischargeDate) : "end of trip"]]
+         ["Trip no.", trip.tripNumber||"—"],["Commences", fmtDate(trip.sailDate)],["Finishes", CONTRACT_FINISH],["Commission", "R "+(c.albRate||"—")+"/ton longfin · R "+(c.yftRate||"—")+"/ton yellowfin"]]
         .map(function(r){ return '<tr><th>'+esc(r[0])+'</th><td>'+esc(r[1])+'</td></tr>'; }).join("")+'</table>'+
       '<p class="sheet-text" style="margin-top:12px;font-size:15px;">'+esc(CONTRACT_INTRO)+'</p>'+
-      contractSections().map(function(x){ return '<p class="sheet-text" style="font-size:15px;"><b>'+esc(x[0])+'</b>\n'+esc(x[1])+'</p>'; }).join("")+
+      ((!c.albRate || !c.yftRate) ? '<div class="locked-note">Commission rate missing — set it in this crew member\'s details first.</div>' : '')+
+      contractSections(c).map(function(x){ return '<p class="sheet-text" style="font-size:15px;"><b>'+esc(x[0])+'</b>\n'+esc(x[1])+'</p>'; }).join("")+
       (k ? '<div class="card" style="background:#fff;"><img src="'+k.sig+'" style="width:100%;max-width:320px;display:block;"></div><p class="helptext">Signed '+esc(fmtDay(todayISO(new Date(k.signedAt))))+'</p>' : '')+
       '<div class="sheet-foot"><button class="btn btn-outline" data-a="pdf">PDF</button>'+
       (trip.ended ? '' : '<button class="btn btn-accent" data-a="sign">'+(k?"Sign again":"Crew signs")+'</button>')+'</div>';
@@ -1377,13 +1381,13 @@
         doc.setFont("helvetica","normal"); y += 9;
       }
       para(CONTRACT_INTRO);
-      var secs = contractSections();
+      var secs = contractSections(c);
       heading(secs[0][0]); para(secs[0][1]);
       y += 2;
       fieldLine([["Name", c.name, 52],["Surname", c.surname, 60]]);
       fieldLine([["I.D./Passport No", c.idNumber, 45],["Contact No", c.contact, 45]]);
       fieldLine([["Next of Kin & Contact", ((c.kinName||"")+"  "+(c.kinContact||"")).trim(), 120]]);
-      fieldLine([["Trip No", trip.tripNumber, 18],["Date Commence", fmtDate(trip.sailDate), 24],["Date Finish", trip.ended && trip.dischargeDate ? fmtDate(trip.dischargeDate) : "", 24]]);
+      fieldLine([["Trip No", trip.tripNumber, 18],["Date Commence", fmtDate(trip.sailDate), 24],["Date Finish", CONTRACT_FINISH, 44]]);
       y += 2;
       secs.slice(1).forEach(function(x){ heading(x[0]); para(x[1]); });
       y += 10;
@@ -1621,8 +1625,7 @@
   function openSettings(){
     var s = state.settings;
     var f = [["Vessel name","vessel"],["Vessel reg no. (DFFE form)","registrationNo"],["Rights holder","rightsHolder"],["Right application no.","rightNo"],["Permit no.","permitNo"],["Skipper","skipper"],["Skipper ID no.","skipperId"],["Skipper contact no.","contact"],["Email","email"],["Discharge port","port"],
-      ["Owner/operator (crew list)","owner"],["Official/licence no. (crew list)","licenceNo"],["Port (crew list)","crewListPort"],
-      ["Commission R/ton longfin (contract)","albRate"],["Commission R/ton yellowfin (contract)","yftRate"]];
+      ["Owner/operator (crew list)","owner"],["Official/licence no. (crew list)","licenceNo"],["Port (crew list)","crewListPort"]];
     var sh = openSheet('<h2>Vessel &amp; form details</h2>'+f.map(function(x){ return field(x[0], "set_"+x[1], s[x[1]]); }).join("")+
       '<div class="sectionlabel">Observer on board (default)</div>'+chips("observer", [{code:"N",label:"No"},{code:"Y",label:"Yes"}], s.observer)+
       '<div class="sectionlabel">Defaults for each fishing day</div>'+
