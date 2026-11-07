@@ -13,7 +13,9 @@ from harness import sign
 sign(app)
 check(p.get_by_text("Confirm crew list").count() == 1, "crew list from last trip offered for confirmation")
 app.tap("#btnConfirmCrew"); app.tap('.sheet-backdrop:last-child [data-a="ok"]')
-check(p.locator("#btnLogStop").is_visible(), "trip screen with LOG STOP after confirming crew")
+check(p.locator("#btnAllContracts").count() == 1, "confirming crew leads to the contracts")
+app.tap("#btnBack"); app.tap("#btnBack")
+check(p.locator("#btnLogStop").is_visible(), "trip screen with LOG STOP")
 
 # Log a stop: weather for the day first, then GPS fills in, fish via buttons
 app.tap("#btnLogStop")
