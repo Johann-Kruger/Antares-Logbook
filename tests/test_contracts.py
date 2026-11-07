@@ -20,6 +20,9 @@ trip = [t for t in app.stored()["trips"] if t["tripNumber"] == "21"][0]
 cid = [c for c in trip["crew"] if c["surname"] == "Fakename"][0]["id"]
 sig = trip["contracts"][cid]["sig"]
 check(sig.startswith("data:image/png;base64,") and len(sig) < 40000, "crew signature stored and kept small (%d chars)" % len(sig))
+check(p.get_by_text("Boxes loaded before sailing.").count() == 1, "after the last signature the app asks for the bait")
+app.tap('.sheet [data-a="cancel"]')
+app.tap("#btnCrew"); app.tap("#btnContracts")
 check("1 of 1 signed" in p.locator("#tbSub").inner_text(), "count updates")
 pdf = app.download("#btnAllContracts")
 txt = subprocess.run(["pdftotext", "-layout", pdf, "-"], capture_output=True, text=True).stdout

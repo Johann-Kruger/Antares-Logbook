@@ -56,7 +56,11 @@ class App:
     def stored(self):
         return json.loads(self.page.evaluate("k => localStorage.getItem(k)", KEY) or "null")
 
-    def tap(self, sel): self.page.locator(sel).first.click(); self.page.wait_for_timeout(150)
+    def tap(self, sel):
+        el = self.page.locator(sel).first
+        # Centre it first so the fixed bottom button bar can't cover it.
+        el.evaluate("e => e.scrollIntoView({block: 'center'})")
+        el.click(); self.page.wait_for_timeout(150)
 
     def download(self, sel):
         with self.page.expect_download() as d:

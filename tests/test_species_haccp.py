@@ -12,7 +12,7 @@ trip = [t for t in app.stored()["trips"] if t["tripNumber"] == "20"][0]
 check(trip["skipperSig"].startswith("data:image/png;base64,"), "signature stored")
 check(len(trip["crew"]) == 1 and not trip["crewConfirmedAt"], "crew copied, not yet confirmed")
 app.tap("#btnBack")
-check(p.get_by_text("Crew list not confirmed yet.").count() == 1, "trip screen nags about crew")
+check("not confirmed" in p.locator("#screen").inner_text() and "NEXT: Crew list" in p.locator("#btnNext").inner_text(), "trip screen guides to the crew list first")
 
 # First stop: skip weather, log LF + bigeye + a new species
 app.tap("#btnLogStop"); app.tap('.sheet [data-a="skip"]')
@@ -37,12 +37,14 @@ p.fill("#sAlb", "12"); app.tap('.sheet [data-a="save"]')
 
 # End-of-day HACCP: defaults all good, flip one, save
 today = datetime.date.today().isoformat()
-app.tap('[data-haccp="%s"]' % today)
+app.tap('[data-endday="%s"]' % today)
 check(p.locator('[data-chips="san:Holds clean"] .chip.on').get_attribute("data-v") == "Y", "sanitation defaults to Yes")
 check(p.locator('#f0_catchTime').input_value().endswith("-" + p.locator('#f0_catchTime').input_value()[-5:]), "catch time range filled")
 app.tap('[data-chips="san:Ice clean"] [data-v="N"]')
 p.fill("#f0_tPrior", "18"); p.fill("#hDailyTemp", "17")
 app.tap('.sheet [data-a="save"]')
+check(p.get_by_text("Day report —").count() == 1, "day report follows the HACCP check")
+app.tap('.sheet [data-a="done"]')
 h = [t for t in app.stored()["trips"] if t["tripNumber"] == "20"][0]["haccp"][today]
 check(h["doneAt"] and h["san"]["Ice clean"] == "N" and h["san"]["Holds clean"] == "Y", "sanitation answers saved")
 check([f["sp"] for f in h["fish"]] == ["ALB", "BET", "DOL"], "a fish inspection row per species: %r" % [f["sp"] for f in h["fish"]])
