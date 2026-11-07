@@ -89,6 +89,11 @@ def sign(app):
     p.mouse.up()
     app.tap('.sheet [data-a="save"]')
 
+def to_crew(app):
+    """After a new trip the departure check opens first; close it and go to the crew list."""
+    app.tap('.sheet [data-a="cancel"]')
+    app.tap("#btnCrew")
+
 checks = {"n": 0, "fail": 0}
 def check(cond, msg):
     checks["n"] += 1

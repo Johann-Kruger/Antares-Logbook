@@ -1,5 +1,5 @@
 """Crew sign their voyage contract on the phone; the PDF carries their details and signature."""
-from harness import App, check, done, fake_season, sign
+from harness import App, check, done, fake_season, sign, to_crew
 import subprocess, json
 
 seed = fake_season()
@@ -9,6 +9,7 @@ app = App(seed=seed)
 p = app.page
 app.tap("#btnNewTrip"); p.fill("#tTripNo", "21"); app.tap('[data-a="save"]')
 sign(app)
+to_crew(app)
 app.tap("#btnConfirmCrew"); app.tap('.sheet-backdrop:last-child [data-a="ok"]')
 check(p.locator("[data-con]").count() == 1, "contracts list the crew, not the skipper")
 check("0 of 1 signed" in p.locator("#tbSub").inner_text(), "none signed yet")
@@ -20,8 +21,7 @@ trip = [t for t in app.stored()["trips"] if t["tripNumber"] == "21"][0]
 cid = [c for c in trip["crew"] if c["surname"] == "Fakename"][0]["id"]
 sig = trip["contracts"][cid]["sig"]
 check(sig.startswith("data:image/png;base64,") and len(sig) < 40000, "crew signature stored and kept small (%d chars)" % len(sig))
-check(p.get_by_text("Boxes loaded before sailing.").count() == 1, "after the last signature the app asks for the bait")
-app.tap('.sheet [data-a="cancel"]')
+check(p.locator("#btnLogStop").count() == 1 and p.locator(".sheet").count() == 0, "after the last signature it's back to the trip")
 app.tap("#btnCrew"); app.tap("#btnContracts")
 check("1 of 1 signed" in p.locator("#tbSub").inner_text(), "count updates")
 pdf = app.download("#btnAllContracts")

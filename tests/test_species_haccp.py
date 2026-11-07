@@ -11,8 +11,8 @@ sign(app)
 trip = [t for t in app.stored()["trips"] if t["tripNumber"] == "20"][0]
 check(trip["skipperSig"].startswith("data:image/png;base64,"), "signature stored")
 check(len(trip["crew"]) == 1 and not trip["crewConfirmedAt"], "crew copied, not yet confirmed")
-app.tap("#btnBack")
-check("not confirmed" in p.locator("#screen").inner_text() and "NEXT: Crew list" in p.locator("#btnNext").inner_text(), "trip screen guides to the crew list first")
+app.tap('.sheet [data-a="cancel"]')
+check("not confirmed" in p.locator("#screen").inner_text() and "NEXT: Departure check" in p.locator("#btnNext").inner_text(), "trip screen guides to the departure check first")
 
 # First stop: skip weather, log LF + bigeye + a new species
 app.tap("#btnLogStop"); app.tap('.sheet [data-a="skip"]')

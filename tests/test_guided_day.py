@@ -10,13 +10,9 @@ app = App(seed=seed)
 p = app.page
 app.tap("#btnNewTrip"); p.fill("#tTripNo", "30"); app.tap('[data-a="save"]')
 sign(app)
-app.tap("#btnConfirmCrew"); app.tap('.sheet-backdrop:last-child [data-a="ok"]')
-app.tap("#btnBack"); app.tap("#btnBack")
-check("NEXT: Bait on board" in p.locator("#btnNext").inner_text(), "skipper-only crew: next step is bait")
-app.tap("#btnNext")
-p.fill("#bLoad", "40"); p.fill("#bKg", "20"); app.tap('.sheet [data-a="save"]')
-# Departure check opens next
-check(p.locator(".sheet h2").last.inner_text() == "Departure check", "departure check follows the bait")
+# Departure check opens first, with the bait on board in it
+check(p.locator(".sheet h2").last.inner_text() == "Departure check", "departure check comes first after signing")
+p.fill("#dBaitBoxes", "40"); p.fill("#dBaitKg", "20"); p.fill("#dBaitType", "pilchard")
 for k in ["vmsOnAt", "vmsConfirmedAt", "permitAt", "rswAt"]:
     app.tap('[data-tick="%s"]' % k)
 p.fill("#dRsw", "-1"); p.fill("#dFuel", "3000"); p.fill("#dWater", "1000")
@@ -24,7 +20,11 @@ app.tap('[data-send="WhatsApp"]')
 url = p.evaluate("() => window.__lastNoticeUrl")
 check(url.startswith("https://wa.me/27820000000?text=") and "DEPARTURE%20NOTIFICATION" in url and "Persons%20on%20board" in url, "WhatsApp message to the FCO: %s" % url[:60])
 check("Notified" in p.locator("#depBody").inner_text(), "FCO notice recorded")
+check("Bait%20on%20board%3A%2040%20boxes%20pilchard" in url, "bait in the FCO message")
 app.tap('.sheet [data-a="done"]')
+check(p.locator("#btnConfirmCrew").count() == 1, "then on to the crew list")
+app.tap("#btnConfirmCrew"); app.tap('.sheet-backdrop:last-child [data-a="ok"]')
+app.tap("#btnBack"); app.tap("#btnBack")
 dep = [t for t in app.stored()["trips"] if t["tripNumber"] == "30"][0]["departure"]
 check(dep["doneAt"] and dep["fuel"] == "3000" and dep["rswTemp"] == "-1" and dep["fcoHow"] == "WhatsApp", "departure check saved: %r" % dep)
 check(p.locator("#btnNext").count() == 0 and p.locator("#btnLogStop").is_visible(), "setup done: LOG STOP is the main button")
