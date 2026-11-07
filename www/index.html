@@ -630,7 +630,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     { k:"foreign", label:"Foreign matter?", yn:"N" }, { k:"parasites", label:"Parasites?", yn:"N" },
     { k:"gutting", label:"Gutting?", yn:"N" }, { k:"washing", label:"Washing?", yn:"Y" }, { k:"offal", label:"Offal discharge hygienic?", yn:"Y" }
   ];
-  var CREW_TEXT = ["name","surname","idNumber","role","nationality","contact","nextOfKin"];
+  var CREW_TEXT = ["name","surname","idNumber","role","nationality","contact","kinName","kinContact"];
   // Positions on the vessel's crew list.
   var POSITIONS = ["Crew","Fisherman","Rodman","Baitmaster","Cook","Engineer","Observer"];
   var CONDITION_FIELDS = ["sst","windDir","windKn","sea","driftDir","driftKn","schoolDepth","bait"];
@@ -686,7 +686,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     out.schemaVersion = SCHEMA_VERSION;
     out.settings = Object.assign(defaultSettings(), isPlainObject(s.settings) ? s.settings : {});
     textFields(out.settings, SETTINGS_TEXT);
-    out.knownCrew = (Array.isArray(s.knownCrew) ? s.knownCrew : []).filter(isPlainObject).map(function(c){ return textFields(Object.assign({}, c), CREW_TEXT); });
+    out.knownCrew = (Array.isArray(s.knownCrew) ? s.knownCrew : []).filter(isPlainObject).map(function(c){ return textFields(splitKin(Object.assign({}, c)), CREW_TEXT); });
     out.lastConditions = isPlainObject(s.lastConditions) ? s.lastConditions : {};
     out.customSpecies = (Array.isArray(s.customSpecies) ? s.customSpecies : []).filter(function(c){ return isPlainObject(c) && c.code && c.name; })
       .map(function(c){ return { code:String(c.code).toUpperCase().slice(0,6), name:String(c.name).slice(0,30) }; });
@@ -696,7 +696,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
       if(!trip.id) trip.id = uid();
       trip.ended = !!trip.ended;
       trip.createdAt = typeof trip.createdAt === "number" ? trip.createdAt : Date.now();
-      trip.crew = (Array.isArray(t.crew) ? t.crew : []).filter(isPlainObject).map(function(c){ var x = textFields(Object.assign({}, c), CREW_TEXT); if(!x.id) x.id = uid(); return x; });
+      trip.crew = (Array.isArray(t.crew) ? t.crew : []).filter(isPlainObject).map(function(c){ var x = textFields(splitKin(Object.assign({}, c)), CREW_TEXT); if(!x.id) x.id = uid(); return x; });
       trip.stops = (Array.isArray(t.stops) ? t.stops : []).filter(isPlainObject).map(function(p){
         var x = textFields(Object.assign({}, p), STOP_TEXT); if(!x.id) x.id = uid();
         var other = {};
@@ -721,6 +721,16 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     if(isPlainObject(h.san)) Object.keys(h.san).forEach(function(k){ if(h.san[k]==="Y" || h.san[k]==="N") out.san[k] = h.san[k]; });
     out.fish = (Array.isArray(h.fish) ? h.fish : []).filter(isPlainObject).map(function(f){ return textFields(Object.assign({}, f), FISH_FIELDS.map(function(x){ return x.k; }).concat(["sp"])); });
     return out;
+  }
+  // Older records kept next of kin as one text ("Sinazo 060 365 2733");
+  // split it at the first digit into name and number.
+  function splitKin(c){
+    if(c.nextOfKin && !c.kinName && !c.kinContact){
+      var m = /^(.*?)\s*(\+?\d[\d\s-]*)$/.exec(String(c.nextOfKin).trim());
+      if(m){ c.kinName = m[1].trim(); c.kinContact = m[2].trim(); } else c.kinName = String(c.nextOfKin).trim();
+    }
+    delete c.nextOfKin;
+    return c;
   }
   function keepCopyOf(raw, tag){
     var key = STORAGE_KEY + "_" + tag + "_" + Date.now();
@@ -1772,13 +1782,14 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
   }
   function openCrewSheet(trip, person){
     var isNew = !person;
-    var p = person || { name:"", surname:"", idNumber:"", role:"Crew", nationality:"RSA", contact:"", nextOfKin:"" };
+    var p = person || { name:"", surname:"", idNumber:"", role:"Crew", nationality:"RSA", contact:"", kinName:"", kinContact:"" };
     var known = state.knownCrew.filter(function(k){ return !trip.crew.some(function(c){ return c.name.toLowerCase()===k.name.toLowerCase() && c.surname.toLowerCase()===k.surname.toLowerCase(); }); });
     var html = '<h2>'+(isNew?"Add crew member":"Crew member")+'</h2>'+
       (isNew && known.length ? '<div class="sectionlabel">From earlier trips</div><div class="chiprow" id="knownList">'+known.map(function(k,i){ return '<div class="chip" data-k="'+i+'">'+esc(k.name+" "+k.surname)+'</div>'; }).join("")+'</div><div class="sectionlabel">Or type a new one</div>' : '')+
       '<div class="grid2">'+field("Name", "cName", p.name)+field("Surname", "cSurname", p.surname)+'</div>'+
       '<div class="grid2">'+field("ID / passport number", "cId", p.idNumber)+field("Nationality", "cNat", p.nationality, "text", 'autocapitalize="characters"')+'</div>'+
-      '<div class="grid2">'+field("Contact number", "cTel", p.contact, "tel")+field("Next of kin (name & number)", "cKin", p.nextOfKin)+'</div>'+
+      field("Contact number", "cTel", p.contact, "tel")+
+      '<div class="grid2">'+field("Next of kin name", "cKinName", p.kinName)+field("Next of kin number", "cKinTel", p.kinContact, "tel")+'</div>'+
       '<div class="sectionlabel">Position</div>'+chips("role", POSITIONS.concat(p.role && POSITIONS.indexOf(p.role)<0 ? [p.role] : []), p.role||"Crew")+
       '<div class="sheet-foot">'+(isNew?'<button class="btn btn-outline" data-a="cancel">Cancel</button>':'<button class="btn btn-danger" data-a="del">Remove</button>')+'<button class="btn btn-accent" data-a="save">Save</button></div>';
     var sh = openSheet(html);
@@ -1796,7 +1807,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     sh.sheet.querySelector('[data-a="save"]').onclick = function(){
       var rec = person || { id:uid() };
       rec.name = val(sh.sheet,"cName"); rec.surname = val(sh.sheet,"cSurname"); rec.idNumber = val(sh.sheet,"cId"); rec.role = chipValue(sh.sheet,"role") || "Crew";
-      rec.nationality = val(sh.sheet,"cNat").toUpperCase(); rec.contact = val(sh.sheet,"cTel"); rec.nextOfKin = val(sh.sheet,"cKin");
+      rec.nationality = val(sh.sheet,"cNat").toUpperCase(); rec.contact = val(sh.sheet,"cTel"); rec.kinName = val(sh.sheet,"cKinName"); rec.kinContact = val(sh.sheet,"cKinTel");
       if(!rec.name){ showToast("Enter a name", true); return; }
       if(!person) trip.crew.push(rec);
       trip.crewConfirmedAt = "";
@@ -1821,7 +1832,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     var x = kv(14, 25, "Owner/Operator:", s.owner); x = kv(x, 25, "Official/Licence No.:", s.licenceNo); kv(x, 25, "Port:", s.crewListPort || s.port);
     x = kv(14, 32, "Trip No.:", trip.tripNumber); x = kv(x, 32, "Departure:", fmtDate(trip.sailDate)+(trip.sailTime?", "+trip.sailTime:"")+", "+(s.crewListPort||s.port)); kv(x, 32, "Persons on board (incl. skipper):", String(personsOnBoard(trip)));
     x = kv(14, 41, "Skipper:", s.skipper); x = kv(x, 41, "ID No.:", s.skipperId); kv(x, 41, "Contact:", s.contact);
-    var cols = [["#",10],["Name",32],["Surname",32],["Nat.",16],["ID / Passport No.",44],["Position",28],["Contact",30],["Next of kin",77]];
+    var cols = [["#",10],["Name",32],["Surname",32],["Nat.",16],["ID / Passport No.",44],["Position",28],["Contact",30],["Next of kin",42],["Next of kin no.",35]];
     var y = 48, rh = 9, x0 = 14;
     x = x0;
     cols.forEach(function(c){ doc.setFillColor(225,232,230); doc.rect(x, y, c[1], rh, "F"); doc.setDrawColor(150); doc.rect(x, y, c[1], rh); doc.setFont("helvetica","bold"); doc.setFontSize(9); doc.text(c[0], x+2, y+6); x += c[1]; });
@@ -1832,7 +1843,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
       if(y > 185){ doc.addPage(); y = 20; }
       var c = crew[i];
       var idText = c ? (c.idNumber || "— (no ID)") : "";
-      var vals = c ? [String(i+1), c.name, c.surname, c.nationality, idText, c.role||"Crew", c.contact, c.nextOfKin] : [String(i+1),"","","","","","",""];
+      var vals = c ? [String(i+1), c.name, c.surname, c.nationality, idText, c.role||"Crew", c.contact, c.kinName, c.kinContact] : [String(i+1),"","","","","","","",""];
       x = x0;
       cols.forEach(function(col, j){ doc.setDrawColor(150); doc.rect(x, y, col[1], rh); doc.setFont("helvetica","normal"); doc.setFontSize(9); doc.text(doc.splitTextToSize(String(vals[j]||""), col[1]-3)[0] || "", x+2, y+6); x += col[1]; });
       y += rh;
