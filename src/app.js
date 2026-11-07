@@ -39,7 +39,7 @@
   var SETTINGS_TEXT = Object.keys(defaultSettings());
   var TRIP_TEXT = ["tripNumber","sailDate","sailTime","dischargeDate","notes"];
   var STOP_TEXT = ["date","time","lat","lon","gpsNote","alb","yft","tank","sst","windDir","windKn","sea","driftDir","driftKn","schoolDepth","bait","notes"];
-  var DAY_TEXT = ["crew","hours","gear","liveBait","baitCondition","polePct","sst","wxTime","wxWindDir","wxWindKn","wxSea","wxSwell","wxSky","wxNote"];
+  var DAY_TEXT = ["crew","hours","gear","liveBait","baitCondition","polePct","sst","wxTime","wxWindDir","wxWindKn","wxSea","wxSwell","wxSky","wxNote","endedAt"];
   var SKY = ["Clear","Cloudy","Rain","Fog"];
   // The vessel's HACCP books (Zip Print forms 0322 / 0323).
   var SAN_OPS = ["Ablution facilities clean","Mess area clean","Galley clean and tidy","Cabins clean and tidy","Fishing deck clean","Fishing gear clean","Knives and saws clean","Holds clean","Processing deck clean","Ice clean","Staff fit and healthy","Staff correctly attired/no jewellery present","Staff hand-washing correct"];
@@ -128,11 +128,16 @@
         x.other = other;
         return x;
       });
+      var bt = isPlainObject(t.bait) ? t.bait : {};
+      trip.bait = { boxKg: String(bt.boxKg==null?"":bt.boxKg), baitType: String(bt.baitType==null?"":bt.baitType),
+        entries: (Array.isArray(bt.entries) ? bt.entries : []).filter(function(e){ return isPlainObject(e) && /^(load|received|used)$/.test(e.type); })
+          .map(function(e){ var x = textFields(Object.assign({}, e), ["id","type","date","boxes","note"]); if(!x.id) x.id = uid(); return x; }) };
       trip.contracts = {};
       if(isPlainObject(t.contracts)) Object.keys(t.contracts).forEach(function(k){
         var c = t.contracts[k];
         if(isPlainObject(c) && typeof c.sig==="string" && /^data:image\/(png|jpeg);base64,/.test(c.sig)) trip.contracts[k] = { sig:c.sig, signedAt:String(c.signedAt||"") };
       });
+      trip.reportsAt = typeof t.reportsAt === "string" ? t.reportsAt : "";
       trip.crewConfirmedAt = typeof t.crewConfirmedAt === "string" ? t.crewConfirmedAt : "";
       trip.haccp = {};
       if(isPlainObject(t.haccp)) Object.keys(t.haccp).forEach(function(d){ var h = normaliseHaccp(t.haccp[d]); if(h) trip.haccp[d] = h; });
@@ -466,7 +471,7 @@
       var clash = state.trips.find(function(x){ return x!==trip && no && x.tripNumber===no; });
       if(clash){ showToast("Trip "+no+" already exists", true); return; }
       if(isNew){
-        trip = { id:uid(), createdAt:Date.now(), ended:false, crew:[], stops:[], days:{}, weights:[], haccp:{}, skipperSig:"", crewConfirmedAt:"", contracts:{} };
+        trip = { id:uid(), createdAt:Date.now(), ended:false, crew:[], stops:[], days:{}, weights:[], haccp:{}, skipperSig:"", crewConfirmedAt:"", contracts:{}, bait:{ boxKg:"", baitType:"", entries:[] } };
         if(last && last.crew.length) trip.crew = last.crew.map(function(c){ return Object.assign({}, c, { id:uid() }); });
         state.trips.push(trip);
       }
@@ -497,8 +502,20 @@
       '<div><div class="n yf">'+tot.yft+'</div><div class="l">YFT trip</div></div>'+
       '<div><div class="n" style="color:var(--text)">'+tot.stops+'</div><div class="l">stops</div></div>'+
       '</div></div>';
-    if(!trip.ended && trip.crew.length && !trip.crewConfirmedAt) html += '<div class="locked-note"><span>Crew list not confirmed yet.</span><button class="btn btn-sm" id="btnGoCrew">Check</button></div>';
+    var steps = tripSteps(trip);
+    if(steps.some(function(x){ return !x.done; })){
+      html += '<div class="card"><h2>'+(trip.ended ? "After offload" : "Before you start fishing")+'</h2>'+steps.map(function(x){
+        return '<div class="row-between" style="padding:7px 0;border-bottom:1px solid var(--line);"><div style="font-size:15px;'+(x.done?'color:var(--text-dim);':'font-weight:700;')+'">'+(x.done?'✓ ':'○ ')+esc(x.label)+(x.sub?'<div class="helptext" style="margin:2px 0 0;">'+esc(x.sub)+'</div>':'')+'</div>'+
+          '<button class="btn '+(x.done?'btn-ghost':'btn-accent')+' btn-sm" data-step-go="'+x.key+'">'+(x.done?'Open':'Go')+'</button></div>';
+      }).join("")+'</div>';
+    }
     if(!trip.ended && !trip.skipperSig) html += '<div class="locked-note"><span>No skipper signature for this trip.</span><button class="btn btn-sm" id="btnSign">Sign</button></div>';
+    if(baitLoaded(trip)){
+      var bb = baitBalance(trip);
+      html += '<div class="card"><div class="row-between"><div><div style="font-weight:800;font-size:17px;">🐟 Bait on board: '+bb+' boxes</div><div class="helptext" style="margin:2px 0 0;">'+
+        (trip.bait.boxKg ? kg(bb*num(trip.bait.boxKg))+' kg · ' : '')+'loaded '+baitSum(trip,"load")+(baitSum(trip,"received")?' · received '+baitSum(trip,"received"):'')+' · used '+baitSum(trip,"used")+'</div></div>'+
+        (trip.ended ? '' : '<button class="btn btn-ghost btn-sm" id="btnBaitRecv">+ Received</button>')+'</div></div>';
+    }
     html += '<div class="actions">'+
       '<button class="btn btn-ghost" id="btnCrew">👥 Crew ('+trip.crew.length+')</button>'+
       '<button class="btn btn-ghost" id="btnWeights">⚖ Weights ('+trip.weights.length+')</button>'+
@@ -519,7 +536,9 @@
       html += '<div class="dayhead"><div><div class="d">'+esc(fmtDay(d))+'</div><div class="s">'+list.length+' stops · '+sumOf(list,"alb")+' LF'+(sumOf(list,"yft")?' · '+sumOf(list,"yft")+' YFT':'')+(otherTotal(list)?' · '+otherTotal(list)+' other':'')+(info.sst?' · SST '+esc(info.sst):'')+'</div>'+
         (hasWeather(trip,d)?'<div class="s">🌬 '+esc(weatherText(trip.days[d])||trip.days[d].wxNote)+'</div>':'')+'</div>'+
         '<button class="btn btn-ghost btn-sm" data-day="'+d+'">Day ▾</button></div>'+
-        (list.length ? '<button class="btn '+(hdone?'btn-ghost':'btn-outline')+' btn-sm" data-haccp="'+d+'" style="width:100%;margin-bottom:8px;'+(hdone?'':'border-color:var(--yellow);color:var(--yellow);')+'">'+(hdone?'✓ End-of-day HACCP done':'End-of-day HACCP check')+'</button>' : '');
+        (list.length ? (dayEnded(trip,d)
+          ? '<div class="btnrow" style="margin-bottom:8px;"><button class="btn btn-ghost btn-sm" data-dayrep="'+d+'">📄 Day report</button><button class="btn btn-ghost btn-sm" data-daytext="'+d+'">💬 Day text</button></div>'
+          : '<button class="btn btn-outline btn-sm" data-endday="'+d+'" style="width:100%;margin-bottom:8px;border-color:var(--yellow);color:var(--yellow);">🌙 End of day — bait, HACCP, report</button>') : '');
       var dayAcc = 0;
       list.forEach(function(s){
         dayAcc += int(s.alb);
@@ -548,16 +567,220 @@
       showConfirm("Reopen "+tripLabel(trip)+" so it can be changed?", "Reopen", "btn-accent", function(){ trip.ended = false; saveState(); render(); });
     };
     el.querySelectorAll("[data-day]").forEach(function(b){ b.onclick = function(){ openDayMenu(trip, b.getAttribute("data-day")); }; });
-    el.querySelectorAll("[data-haccp]").forEach(function(b){ b.onclick = function(){ openHaccpSheet(trip, b.getAttribute("data-haccp")); }; });
-    var gc = document.getElementById("btnGoCrew"); if(gc) gc.onclick = function(){ go("crew"); };
+    el.querySelectorAll("[data-endday]").forEach(function(b){ b.onclick = function(){ startEndOfDay(trip, b.getAttribute("data-endday")); }; });
+    el.querySelectorAll("[data-dayrep]").forEach(function(b){ b.onclick = function(){ buildDayReportPdf(trip, b.getAttribute("data-dayrep")); }; });
+    el.querySelectorAll("[data-daytext]").forEach(function(b){ b.onclick = function(){ shareDayText(trip, b.getAttribute("data-daytext")); }; });
+    el.querySelectorAll("[data-step-go]").forEach(function(b){ b.onclick = function(){ runStep(trip, b.getAttribute("data-step-go")); }; });
+    var brc = document.getElementById("btnBaitRecv"); if(brc) brc.onclick = function(){ openBaitReceivedSheet(trip); };
     var sg = document.getElementById("btnSign"); if(sg) sg.onclick = function(){ captureSkipperSig(trip); };
     el.querySelectorAll("[data-stop]").forEach(function(r){ r.onclick = function(){ openStopSheet(trip, trip.stops.find(function(s){ return s.id===r.getAttribute("data-stop"); })); }; });
+    var fab = document.getElementById("fab");
+    var next = steps.find(function(x){ return !x.done; });
     if(!trip.ended){
-      var fab = document.getElementById("fab");
-      fab.innerHTML = '<button class="btn btn-accent btn-big" id="btnLogStop">📍 LOG STOP</button>';
-      fab.classList.remove("hidden");
-      document.getElementById("btnLogStop").onclick = function(){ openStopSheet(trip, null); };
+      var todayStops = stopsOn(trip, today).length;
+      if(next){
+        // Setup isn't finished: the big button is the next step; a stop can still be logged.
+        fab.innerHTML = '<div class="btnrow"><button class="btn btn-ghost" id="btnLogStop" style="flex:0 0 34%;min-height:72px;">📍 Stop</button><button class="btn btn-accent btn-big" id="btnNext">NEXT: '+esc(next.short)+'</button></div>';
+      } else if(todayStops && !dayEnded(trip, today)){
+        fab.innerHTML = '<div class="btnrow"><button class="btn btn-accent btn-big" id="btnLogStop">📍 LOG STOP</button><button class="btn btn-ghost" id="btnEndDay" style="flex:0 0 34%;min-height:72px;">🌙 End day</button></div>';
+      } else {
+        fab.innerHTML = '<button class="btn btn-accent btn-big" id="btnLogStop">📍 LOG STOP</button>';
+      }
+    } else if(next){
+      fab.innerHTML = '<button class="btn btn-accent btn-big" id="btnNext">NEXT: '+esc(next.short)+'</button>';
     }
+    if(fab.innerHTML){
+      fab.classList.remove("hidden");
+      var ls = document.getElementById("btnLogStop"); if(ls) ls.onclick = function(){ openStopSheet(trip, null); };
+      var nx = document.getElementById("btnNext"); if(nx) nx.onclick = function(){ runStep(trip, next.key); };
+      var ed = document.getElementById("btnEndDay"); if(ed) ed.onclick = function(){ startEndOfDay(trip, today); };
+    }
+  }
+  // The order a trip is worked through. Before the trip ends: crew, contracts,
+  // bait. After it ends: offloading temperatures, weigh sheet, reports.
+  function tripSteps(trip){
+    if(!trip.ended){
+      var crew = crewOnly(trip);
+      var signed = crew.filter(function(c){ return trip.contracts[c.id]; }).length;
+      return [
+        { key:"crew", label:"Crew list", short:"Crew list", done: !!(trip.crewConfirmedAt && trip.crew.length), sub: trip.crew.length ? personsOnBoard(trip)+" on board incl. skipper"+(trip.crewConfirmedAt?"":" — not confirmed") : "" },
+        { key:"contracts", label:"Crew contracts signed", short:"Contracts", done: !!trip.crewConfirmedAt && signed===crew.length, sub: crew.length ? signed+" of "+crew.length+" signed" : "" },
+        { key:"bait", label:"Bait on board", short:"Bait on board", done: baitLoaded(trip), sub: baitLoaded(trip) ? baitSum(trip,"load")+" boxes loaded" : "" }
+      ];
+    }
+    var offDone = Object.keys(trip.haccp).length>0 && Object.keys(trip.haccp).every(function(d){ return trip.haccp[d].fish.every(function(f){ return f.tOff; }); });
+    var wsDone = trip.weights.length>0;
+    return [
+      { key:"offtemps", label:"Offloading temperatures", short:"Offload temps", done: offDone },
+      { key:"weights", label:"Weigh sheet", short:"Weigh sheet", done: wsDone, sub: trip.weights.length ? trip.weights.length+" fish weighed" : "" },
+      { key:"reports", label:"Reports", short:"Reports", done: !!trip.reportsAt }
+    ];
+  }
+  function runStep(trip, key){
+    if(key==="crew") go("crew");
+    else if(key==="contracts") go("contracts");
+    else if(key==="bait") openBaitLoadSheet(trip);
+    else if(key==="offtemps") openOffloadTemps(trip);
+    else if(key==="weights") go("weights");
+    else if(key==="reports"){ trip.reportsAt = trip.reportsAt || new Date().toISOString(); saveState(); go("reports"); }
+  }
+
+  // ================= Bait =================
+  function baitSum(trip, type, date){ return trip.bait.entries.filter(function(e){ return e.type===type && (!date || e.date===date); }).reduce(function(a,e){ return a+num(e.boxes); }, 0); }
+  function baitLoaded(trip){ return trip.bait.entries.some(function(e){ return e.type==="load"; }); }
+  function baitBalance(trip, uptoDate){
+    return trip.bait.entries.filter(function(e){ return !uptoDate || e.date<=uptoDate; }).reduce(function(a,e){ return a + (e.type==="used" ? -num(e.boxes) : num(e.boxes)); }, 0);
+  }
+  function openBaitLoadSheet(trip){
+    if(lockedGuard(trip)) return;
+    var load = trip.bait.entries.find(function(e){ return e.type==="load"; });
+    var sh = openSheet('<h2>Bait on board</h2><p class="helptext" style="margin:0 0 8px;">Boxes loaded before sailing.</p>'+
+      '<div class="grid2">'+field("Boxes", "bLoad", load ? load.boxes : "", "text", 'inputmode="numeric"')+field("kg per box", "bKg", trip.bait.boxKg, "text", 'inputmode="decimal"')+'</div>'+
+      field("Bait type (optional)", "bType", trip.bait.baitType, "text", 'placeholder="e.g. pilchard"')+
+      '<div class="sheet-foot"><button class="btn btn-outline" data-a="cancel">Cancel</button><button class="btn btn-accent" data-a="save">Save</button></div>');
+    sh.sheet.querySelector('[data-a="cancel"]').onclick = sh.close;
+    sh.sheet.querySelector('[data-a="save"]').onclick = function(){
+      var n = num(val(sh.sheet,"bLoad"));
+      if(!(n>0)){ showToast("Enter the number of boxes", true); return; }
+      if(load) load.boxes = String(n);
+      else trip.bait.entries.push({ id:uid(), type:"load", date: trip.sailDate || todayISO(), boxes:String(n), note:"" });
+      trip.bait.boxKg = val(sh.sheet,"bKg"); trip.bait.baitType = val(sh.sheet,"bType");
+      saveState(); sh.close(); render(); showToast(n+" boxes of bait on board");
+    };
+  }
+  function openBaitReceivedSheet(trip){
+    if(lockedGuard(trip)) return;
+    var sh = openSheet('<h2>Bait received</h2><p class="helptext" style="margin:0 0 8px;">Boxes taken on during the trip.</p>'+
+      '<div class="grid2">'+field("Boxes", "bRecv", "", "text", 'inputmode="numeric"')+field("Date", "bDate", todayISO(), "date")+'</div>'+
+      field("From (optional)", "bNote", "", "text", 'placeholder="e.g. another vessel"')+
+      '<div class="sheet-foot"><button class="btn btn-outline" data-a="cancel">Cancel</button><button class="btn btn-accent" data-a="save">Add</button></div>');
+    sh.sheet.querySelector('[data-a="cancel"]').onclick = sh.close;
+    sh.sheet.querySelector('[data-a="save"]').onclick = function(){
+      var n = num(val(sh.sheet,"bRecv")); if(!(n>0)){ showToast("Enter the number of boxes", true); return; }
+      trip.bait.entries.push({ id:uid(), type:"received", date: val(sh.sheet,"bDate") || todayISO(), boxes:String(n), note: val(sh.sheet,"bNote") });
+      saveState(); sh.close(); render(); showToast("+"+n+" boxes · "+baitBalance(trip)+" on board");
+    };
+  }
+  function openBaitUsedSheet(trip, date, after){
+    var used = trip.bait.entries.find(function(e){ return e.type==="used" && e.date===date; });
+    var before = baitBalance(trip, date) + (used ? num(used.boxes) : 0);
+    var sh = openSheet('<h2>Bait used — '+esc(fmtDay(date))+'</h2>'+
+      '<p class="sheet-text">On board: <b>'+before+' boxes</b>'+(baitSum(trip,"received",date)?' (incl. '+baitSum(trip,"received",date)+' received today)':'')+'</p>'+
+      '<div class="counter"><button data-bstep="-1">−</button><input id="bUsed" type="number" inputmode="decimal" min="0" value="'+esc(used ? used.boxes : "")+'" placeholder="0"><button data-bstep="1">+</button></div>'+
+      '<p class="sheet-text" id="bLeft" style="margin-top:10px;"></p>'+
+      '<div class="sheet-foot"><button class="btn btn-outline" data-a="cancel">Cancel</button><button class="btn btn-accent" data-a="save">'+(after?"Save &amp; next":"Save")+'</button></div>');
+    var inp = sh.sheet.querySelector("#bUsed");
+    function upd(){ var left = before - num(inp.value); sh.sheet.querySelector("#bLeft").innerHTML = "Balance after today: <b>"+left+" boxes</b>"+(trip.bait.boxKg?" ("+kg(left*num(trip.bait.boxKg))+" kg)":"")+(left<0?' <span style="color:var(--danger)">— more than on board</span>':""); }
+    upd(); inp.addEventListener("input", upd);
+    sh.sheet.querySelectorAll("[data-bstep]").forEach(function(b){ b.onclick = function(){ inp.value = String(Math.max(0, num(inp.value)+int(b.getAttribute("data-bstep")))); upd(); }; });
+    sh.sheet.querySelector('[data-a="cancel"]').onclick = sh.close;
+    sh.sheet.querySelector('[data-a="save"]').onclick = function(){
+      var n = Math.max(0, num(inp.value));
+      if(used) used.boxes = String(n); else trip.bait.entries.push({ id:uid(), type:"used", date:date, boxes:String(n), note:"" });
+      saveState(); sh.close();
+      if(after) after(); else render();
+    };
+  }
+
+  // ================= End of day =================
+  function dayEnded(trip, date){ return !!(trip.days[date] && trip.days[date].endedAt); }
+  // Bait used -> HACCP check -> day report, one after the other.
+  function startEndOfDay(trip, date){
+    if(lockedGuard(trip)) return;
+    function haccp(){ openHaccpSheet(trip, date, report); }
+    function report(){
+      var day = trip.days[date] || textFields({}, DAY_TEXT);
+      day.endedAt = new Date().toISOString(); trip.days[date] = textFields(day, DAY_TEXT);
+      saveState(); render(); openDayReportSheet(trip, date);
+    }
+    if(baitLoaded(trip)) openBaitUsedSheet(trip, date, haccp); else haccp();
+  }
+  function openDayReportSheet(trip, date){
+    var sh = openSheet('<h2>Day report — '+esc(fmtDay(date))+'</h2><pre style="white-space:pre-wrap;font-family:inherit;font-size:15px;line-height:1.5;margin:0 0 12px;">'+esc(dayText(trip, date))+'</pre>'+
+      '<div class="sheet-actions"><button class="btn btn-accent" data-a="pdf">📄 Share day report (PDF)</button><button class="btn btn-ghost" data-a="text">💬 Send as text</button><button class="btn btn-outline" data-a="done">Done</button></div>');
+    sh.sheet.querySelector('[data-a="pdf"]').onclick = function(){ buildDayReportPdf(trip, date); };
+    sh.sheet.querySelector('[data-a="text"]').onclick = function(){ shareDayText(trip, date); };
+    sh.sheet.querySelector('[data-a="done"]').onclick = sh.close;
+  }
+  function daySummary(trip, date){
+    var list = stopsOn(trip, date);
+    var sps = allSpecies().filter(function(sp){ return sumSp(list, sp.code); });
+    var best = list.slice().sort(function(a,b){ return int(b.alb)-int(a.alb); })[0];
+    var h = trip.haccp[date];
+    var issues = [];
+    if(h){
+      Object.keys(h.san).forEach(function(q){ if(h.san[q]==="N") issues.push(q+": No"); });
+      h.fish.forEach(function(f){ FISH_FIELDS.forEach(function(x){ if(x.yn && f[x.k] && f[x.k]!==x.yn) issues.push(speciesOf(f.sp).short+" "+x.label.replace("?","")+": "+(f[x.k]==="Y"?"Yes":"No")); }); });
+    }
+    return { list:list, sps:sps, best:best, info:dayInfo(trip, date), haccp:h, issues:issues,
+      used: baitSum(trip,"used",date), received: baitSum(trip,"received",date), balance: baitBalance(trip, date) };
+  }
+  function dayText(trip, date){
+    var d = daySummary(trip, date), s = state.settings, L = [];
+    L.push("FV "+String(s.vessel).toUpperCase()+" – "+tripLabel(trip)+" – "+fmtDay(date)+" "+date.slice(0,4));
+    L.push("Stops: "+d.list.length+(d.list.length ? " ("+d.list[0].time+"–"+d.list[d.list.length-1].time+")" : ""));
+    L.push("Catch: "+(d.sps.length ? d.sps.map(function(sp){ return sumSp(d.list, sp.code)+" "+sp.short; }).join(", ") : "none"));
+    L.push("Trip total: "+dffeSpecies(trip).map(function(sp){ return sumSp(trip.stops, sp.code)+" "+sp.short; }).filter(function(x){ return !/^0 /.test(x); }).join(", "));
+    if(d.best && int(d.best.alb)) L.push("Best stop: "+d.best.alb+" LF at "+d.best.time+", "+fmtPos(d.best.lat, d.best.lon));
+    if(hasWeather(trip, date)) L.push("Weather: "+(weatherText(trip.days[date]) || trip.days[date].wxNote));
+    if(d.info.sst) L.push("SST: "+d.info.sst+" °C");
+    if(baitLoaded(trip)) L.push("Bait: used "+d.used+(d.received?", received "+d.received:"")+", on board "+d.balance+" boxes"+(trip.bait.boxKg?" ("+kg(d.balance*num(trip.bait.boxKg))+" kg)":""));
+    L.push("HACCP: "+(d.haccp && d.haccp.doneAt ? (d.issues.length ? "done – "+d.issues.join("; ") : "done, all OK") : "not done"));
+    return L.join("\n");
+  }
+  function shareDayText(trip, date){
+    var text = dayText(trip, date);
+    try{
+      var Share = isNativeApp() && window.Capacitor.Plugins && window.Capacitor.Plugins.Share;
+      if(Share && Share.share){ Share.share({ text:text, title:"Day report "+fmtDay(date) }).catch(function(){}); return; }
+    }catch(e){}
+    // Off the phone: show it to copy.
+    var sh = openSheet('<h2>Day report text</h2><textarea id="dayTxt" style="width:100%;min-height:240px;font-size:15px;background:var(--surface-2);color:var(--text);border-radius:10px;padding:10px;border:1px solid var(--line);">'+esc(text)+'</textarea>'+
+      '<div class="sheet-foot"><button class="btn btn-outline" data-a="close">Close</button><button class="btn btn-accent" data-a="copy">Copy</button></div>');
+    sh.sheet.querySelector('[data-a="close"]').onclick = sh.close;
+    sh.sheet.querySelector('[data-a="copy"]').onclick = function(){
+      var ta = sh.sheet.querySelector("#dayTxt"); ta.select();
+      try{ (navigator.clipboard && navigator.clipboard.writeText) ? navigator.clipboard.writeText(text) : document.execCommand("copy"); showToast("Copied"); }catch(e){ showToast("Select the text and copy it", true); }
+    };
+  }
+  function buildDayReportPdf(trip, date){
+    if(!window.jspdf){ showToast("PDF library missing", true); return; }
+    var d = daySummary(trip, date), s = state.settings;
+    var doc = new window.jspdf.jsPDF({ unit:"mm", format:"a4" });
+    var W = 210, L = 14, y = 16;
+    doc.setFont("helvetica","bold"); doc.setFontSize(15); doc.text("DAILY REPORT — FV "+String(s.vessel).toUpperCase(), W/2, y, { align:"center" }); y += 7;
+    doc.setFontSize(11); doc.setFont("helvetica","normal");
+    doc.text(fmtDay(date)+" "+date.slice(0,4)+"   ·   "+tripLabel(trip)+"   ·   Skipper "+s.skipper, W/2, y, { align:"center" }); y += 9;
+    var info = [];
+    if(hasWeather(trip, date)) info.push(["Weather", (weatherText(trip.days[date]) || trip.days[date].wxNote)+(trip.days[date].wxTime?" ("+trip.days[date].wxTime+")":"")]);
+    if(d.info.sst) info.push(["SST", d.info.sst+" °C"]);
+    info.push(["Catch today", d.sps.length ? d.sps.map(function(sp){ return sumSp(d.list, sp.code)+" "+sp.name; }).join(", ") : "none"]);
+    info.push(["Trip total", dffeSpecies(trip).map(function(sp){ return sumSp(trip.stops, sp.code)+" "+sp.name; }).join(", ")]);
+    if(baitLoaded(trip)) info.push(["Bait", "used "+d.used+(d.received?", received "+d.received:"")+", on board "+d.balance+" boxes"+(trip.bait.boxKg?" ("+kg(d.balance*num(trip.bait.boxKg))+" kg)":"")]);
+    info.push(["HACCP", d.haccp && d.haccp.doneAt ? (d.issues.length ? "done – needs attention: "+d.issues.join("; ") : "done, all OK") : "not done"]);
+    info.forEach(function(r){
+      doc.setFont("helvetica","bold"); doc.text(r[0]+":", L, y); doc.setFont("helvetica","normal");
+      var l = doc.splitTextToSize(r[1], W-2*L-30); doc.text(l, L+30, y); y += l.length*5+1.5;
+    });
+    y += 4;
+    var cols = [["Time",16],["Position",44],["Tank",13]].concat(d.sps.map(function(sp){ return [sp.short,15]; }), [["Day LF",17],["SST",14],["Wind",24],["Depth",15]]);
+    var x = L;
+    cols.forEach(function(c){ cellText(doc, c[0], x, y, c[1], 7, { bold:true, fill:[225,232,230], size:8.5 }); x += c[1]; });
+    y += 7;
+    var acc = 0;
+    d.list.forEach(function(st){
+      if(y > 270){ doc.addPage(); y = 16; }
+      acc += int(st.alb);
+      var vals = [st.time, fmtPos(st.lat, st.lon), st.tank].concat(d.sps.map(function(sp){ return countOf(st, sp.code) || ""; }), [acc, st.sst, ((st.windDir||"")+" "+(st.windKn||"")).trim(), st.schoolDepth ? st.schoolDepth+" m" : ""]);
+      x = L; cols.forEach(function(c, j){ cellText(doc, vals[j], x, y, c[1], 6.5, { size:8.5 }); x += c[1]; }); y += 6.5;
+    });
+    x = L; cols.forEach(function(c, j){
+      var v = j===0 ? "Total" : (j>=3 && j<3+d.sps.length) ? sumSp(d.list, d.sps[j-3].code) : "";
+      cellText(doc, v, x, y, c[1], 7, { bold:true, size:8.5 }); x += c[1];
+    });
+    y += 16;
+    doc.setFontSize(10); doc.text("Skipper:", L, y); sigOnPdf(doc, trip, L+18, y+1, 40); doc.line(L+18, y+1, L+70, y+1);
+    saveFileOut(fileName(trip, "day_report_"+date.replace(/-/g,""), "pdf"), doc.output("blob"));
   }
   function lockedGuard(trip){
     if(trip.ended){ showToast("This trip is ended — tap Reopen to change it", true); return true; }
@@ -868,8 +1091,10 @@
     if(!trip.crew.length) warn.push("No crew list");
     else if(!trip.crewConfirmedAt) warn.push("Crew list not confirmed");
     if(!trip.skipperSig) warn.push("No skipper signature");
+    var openDays = tripDates(trip).filter(function(d){ return stopsOn(trip,d).length && !dayEnded(trip,d); });
+    if(openDays.length) warn.push("End of day not done for "+openDays.map(fmtDay).join(", "));
     var noH = tripDates(trip).filter(function(d){ return stopsOn(trip,d).length && !(trip.haccp[d] && trip.haccp[d].doneAt); });
-    if(noH.length) warn.push("End-of-day HACCP not done for "+noH.map(fmtDay).join(", "));
+    if(noH.length && !openDays.length) warn.push("End-of-day HACCP not done for "+noH.map(fmtDay).join(", "));
     var unsigned = crewOnly(trip).filter(function(c){ return !trip.contracts[c.id]; }).length;
     if(unsigned) warn.push(unsigned+" crew contract(s) not signed");
     if(!trip.weights.length) warn.push("No offload weights yet (you can add them after ending)");
@@ -885,7 +1110,7 @@
     sh.sheet.querySelector('[data-a="ok"]').onclick = function(){
       trip.dischargeDate = val(sh.sheet,"eDis"); trip.ended = true;
       saveState(); sh.close(); render();
-      showToast("Trip ended. Add the offload weights, then make the reports.");
+      showToast("Trip ended. Next: offloading temperatures, then the weigh sheet.");
     };
   }
 
@@ -893,12 +1118,14 @@
   function openDayMenu(trip, date){
     var sh = openSheet('<h2>'+esc(fmtDay(date))+'</h2><div class="sheet-actions">'+
       '<button class="btn btn-ghost" data-a="wx">🌬 Weather'+(hasWeather(trip,date)?' — '+esc(weatherText(trip.days[date])||"set"):'')+'</button>'+
-      '<button class="btn btn-ghost" data-a="haccp">🧊 End-of-day HACCP check</button>'+
+      '<button class="btn btn-ghost" data-a="eod">🌙 End of day (bait, HACCP, report)</button>'+
+      '<button class="btn btn-ghost" data-a="haccp">🧊 HACCP check only</button>'+
       '<button class="btn btn-ghost" data-a="dffe">📋 DFFE day details (crew, hours, bait, SST)</button>'+
       '<button class="btn btn-outline" data-a="close">Close</button></div>');
     sh.sheet.querySelector('[data-a="close"]').onclick = sh.close;
     sh.sheet.querySelector('[data-a="wx"]').onclick = function(){ sh.close(); if(lockedGuard(trip)) return; openWeatherSheet(trip, date); };
     sh.sheet.querySelector('[data-a="haccp"]').onclick = function(){ sh.close(); openHaccpSheet(trip, date); };
+    sh.sheet.querySelector('[data-a="eod"]').onclick = function(){ sh.close(); startEndOfDay(trip, date); };
     sh.sheet.querySelector('[data-a="dffe"]').onclick = function(){ sh.close(); openDaySheet(trip, date); };
   }
   // Previous day's answers on any trip, so each day starts from the last one.
@@ -931,7 +1158,7 @@
     });
     return h;
   }
-  function openHaccpSheet(trip, date){
+  function openHaccpSheet(trip, date, after){
     var saved = trip.haccp[date];
     var h = saved ? JSON.parse(JSON.stringify(saved)) : haccpDefaults(trip, date);
     // Species caught since the check was saved get a row too.
@@ -985,7 +1212,8 @@
       });
       h.dailyTemp = val(root,"hDailyTemp"); h.inspectedBy = val(root,"hBy"); h.doneAt = new Date().toISOString();
       trip.haccp[date] = normaliseHaccp(h);
-      saveState(); sh.close(); render(); showToast("End-of-day check saved");
+      saveState(); sh.close(); showToast("End-of-day check saved");
+      if(after) after(); else render();
     };
   }
   function openOffloadTemps(trip){
@@ -998,7 +1226,8 @@
     sh.sheet.querySelector('[data-a="cancel"]').onclick = sh.close;
     sh.sheet.querySelector('[data-a="save"]').onclick = function(){
       dates.forEach(function(d){ trip.haccp[d].fish.forEach(function(f, i){ f.tOff = val(sh.sheet, "off_"+d+"_"+i); }); });
-      saveState(); sh.close(); render(); showToast("Offloading temperatures saved");
+      saveState(); sh.close(); showToast("Offloading temperatures saved");
+      if(trip.ended && !trip.weights.length) go("weights"); else render();
     };
   }
 
@@ -1353,7 +1582,11 @@
       openSignatureSheet(c.name+" "+c.surname+" — sign here", "I have read and agree to the voyage contract for "+tripLabel(trip)+".", function(data){
         trip.contracts[c.id] = { sig:data, signedAt:new Date().toISOString() };
         if(saveState()) showToast(c.name+" signed");
-        render();
+        var crew = crewOnly(trip);
+        if(crew.every(function(x){ return trip.contracts[x.id]; }) && !baitLoaded(trip)){
+          // Everyone has signed: on to the bait.
+          go("trip"); openBaitLoadSheet(trip);
+        } else render();
       }, 360);
     };
   }
@@ -1426,6 +1659,12 @@
       '<button class="btn btn-ghost" id="btnFishPdf">Fresh fish inspection (PDF)</button>'+
       '<button class="btn btn-ghost" id="btnSanPdf">Sanitation &amp; storage (PDF)</button>'+
       '</div></div>';
+    var ended = tripDates(trip).filter(function(d){ return stopsOn(trip,d).length; });
+    if(ended.length) html += '<div class="card"><h2>Daily reports</h2>'+ended.map(function(d){
+      return '<div class="row-between" style="padding:6px 0;border-bottom:1px solid var(--line);"><b>'+esc(fmtDay(d))+'</b><div class="btnrow" style="flex:0 0 auto;"><button class="btn btn-ghost btn-sm" data-dayrep="'+d+'">PDF</button><button class="btn btn-ghost btn-sm" data-daytext="'+d+'">Text</button></div></div>';
+    }).join("")+'</div>';
+    if(baitLoaded(trip)) html += '<div class="card"><h2>Bait</h2><p class="sheet-text" style="margin:0;">Loaded '+baitSum(trip,"load")+' · received '+baitSum(trip,"received")+' · used '+baitSum(trip,"used")+' · <b>left '+baitBalance(trip)+' boxes</b>'+(trip.bait.boxKg?' ('+kg(baitBalance(trip)*num(trip.bait.boxKg))+' kg)':'')+'</p></div>';
+    if(!trip.weights.length) html += '<div class="locked-note">The weigh sheet isn\'t done yet — the DFFE form needs the offload weights.</div>';
     html += '<div class="card"><h2>Other files</h2><div class="sheet-actions">'+
       '<button class="btn btn-ghost" id="btnCrewPdf2">Crew list (PDF)</button>'+
       '<button class="btn btn-ghost" id="btnContractsPdf">Crew contracts (PDF)</button>'+
@@ -1444,6 +1683,8 @@
     document.getElementById("btnFishPdf").onclick = function(){ buildFishInspectionPdf(trip); };
     document.getElementById("btnSanPdf").onclick = function(){ buildSanitationPdf(trip); };
     var sr = document.getElementById("btnSignR"); if(sr) sr.onclick = function(){ captureSkipperSig(trip); };
+    el.querySelectorAll("[data-dayrep]").forEach(function(b){ b.onclick = function(){ buildDayReportPdf(trip, b.getAttribute("data-dayrep")); }; });
+    el.querySelectorAll("[data-daytext]").forEach(function(b){ b.onclick = function(){ shareDayText(trip, b.getAttribute("data-daytext")); }; });
   }
   // Species for the form: always longfin, plus anything caught or weighed.
   function dffeSpecies(trip){
