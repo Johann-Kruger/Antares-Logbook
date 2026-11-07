@@ -4,7 +4,9 @@ offload temps -> weigh sheet -> reports."""
 from harness import App, check, done, fake_season, sign
 import datetime, subprocess
 
-app = App(seed=fake_season())
+seed = fake_season()
+seed["settings"].update(fcoName="Test Officer", fcoPhone="082 000 0000", fcoEmail="fco@example.invalid")
+app = App(seed=seed)
 p = app.page
 app.tap("#btnNewTrip"); p.fill("#tTripNo", "30"); app.tap('[data-a="save"]')
 sign(app)
@@ -13,6 +15,18 @@ app.tap("#btnBack"); app.tap("#btnBack")
 check("NEXT: Bait on board" in p.locator("#btnNext").inner_text(), "skipper-only crew: next step is bait")
 app.tap("#btnNext")
 p.fill("#bLoad", "40"); p.fill("#bKg", "20"); app.tap('.sheet [data-a="save"]')
+# Departure check opens next
+check(p.locator(".sheet h2").last.inner_text() == "Departure check", "departure check follows the bait")
+for k in ["vmsOnAt", "vmsConfirmedAt", "permitAt", "rswAt"]:
+    app.tap('[data-tick="%s"]' % k)
+p.fill("#dRsw", "-1"); p.fill("#dFuel", "3000"); p.fill("#dWater", "1000")
+app.tap('[data-send="WhatsApp"]')
+url = p.evaluate("() => window.__lastNoticeUrl")
+check(url.startswith("https://wa.me/27820000000?text=") and "DEPARTURE%20NOTIFICATION" in url and "Persons%20on%20board" in url, "WhatsApp message to the FCO: %s" % url[:60])
+check("Notified" in p.locator("#depBody").inner_text(), "FCO notice recorded")
+app.tap('.sheet [data-a="done"]')
+dep = [t for t in app.stored()["trips"] if t["tripNumber"] == "30"][0]["departure"]
+check(dep["doneAt"] and dep["fuel"] == "3000" and dep["rswTemp"] == "-1" and dep["fcoHow"] == "WhatsApp", "departure check saved: %r" % dep)
 check(p.locator("#btnNext").count() == 0 and p.locator("#btnLogStop").is_visible(), "setup done: LOG STOP is the main button")
 check("40 boxes" in p.locator("#screen").inner_text(), "bait on board shown")
 
@@ -45,7 +59,13 @@ check([(e["type"], e["boxes"]) for e in trip["bait"]["entries"]] == [("load", "4
 
 # End trip -> after-offload steps
 app.tap("#btnEnd"); app.tap('.sheet [data-a="ok"]')
-check("NEXT: Offload temps" in p.locator("#btnNext").inner_text(), "after ending: offload temperatures next")
+check(p.locator(".sheet h2").last.inner_text() == "Landing notice", "landing notice opens on End trip")
+p.fill("#lTime", "15:30"); p.dispatch_event("#lTime", "change")
+app.tap('[data-send="Email"]')
+url = p.evaluate("() => window.__lastNoticeUrl")
+check(url.startswith("mailto:fco%40example.invalid?subject=Landing") and "15%3A30" in url and "69%20Longfin" in url, "landing email: %s" % url[:70])
+app.tap('.sheet [data-a="close"]')
+check("NEXT: Offload temps" in p.locator("#btnNext").inner_text(), "then offload temperatures")
 app.tap("#btnNext")
 p.fill('[id^="off_"]', "-1.5"); app.tap('.sheet [data-a="save"]')
 check(p.locator("#wKg").count() == 1, "then straight to the weigh sheet")
@@ -54,5 +74,8 @@ app.tap("#btnBack")
 check("NEXT: Reports" in p.locator("#btnNext").inner_text(), "then reports")
 app.tap("#btnNext")
 check(p.locator("#btnDffe").count() == 1 and p.locator("[data-dayrep]").count() == 1, "reports screen with daily reports")
+import subprocess
+rec = subprocess.run(["pdftotext", "-layout", app.download("#btnDepPdf"), "-"], capture_output=True, text=True).stdout
+check("DEPARTURE & LANDING RECORD" in rec and "3000 L" in rec and "by WhatsApp" in rec and "by Email" in rec, "departure & landing record PDF")
 app.close()
 done("test_guided_day")
