@@ -45,6 +45,10 @@
   var STOP_TEXT = ["date","time","lat","lon","gpsNote","alb","yft","tank","sst","windDir","windKn","sea","driftDir","driftKn","schoolDepth","bait","notes"];
   var DAY_TEXT = ["crew","hours","gear","liveBait","baitCondition","polePct","sst","wxTime","wxWindDir","wxWindKn","wxSea","wxSwell","wxSky","wxNote","endedAt"];
   var SKY = ["Clear","Cloudy","Rain","Fog"];
+  // Defects and maintenance, kept for the vessel across all trips.
+  var DEFECT_CATS = ["Crew accommodation","Deck","Fish holds","Wheelhouse","Engine room","Galley","Tackle"];
+  var DEFECT_PRIORITY = ["Low","Medium","High","Safety"];
+  var DEFECT_TEXT = ["category","title","details","priority","status","raisedAt","raisedTrip","raisedBy","closedAt","closedTrip","closedNote"];
   // The vessel's HACCP books (Zip Print forms 0322 / 0323).
   var SAN_OPS = ["Ablution facilities clean","Mess area clean","Galley clean and tidy","Cabins clean and tidy","Fishing deck clean","Fishing gear clean","Knives and saws clean","Holds clean","Processing deck clean","Ice clean","Staff fit and healthy","Staff correctly attired/no jewellery present","Staff hand-washing correct"];
   var SAN_STORE = ["Fishing gear clean and stowed","Mutton cloth dry and stored","Fuel and oil separate, no spillage","Chemicals and cleaning stored","Galley food fresh and stowed","Durables in sealed containers, no rust"];
@@ -106,7 +110,7 @@
   var storageLocked = false;
   var loadProblem = null;
   function emptyState(){
-    return { schemaVersion:SCHEMA_VERSION, settings:defaultSettings(), trips:[], knownCrew:[], notDuplicates:[], customSpecies:[], lastConditions:{}, backupAt:"" };
+    return { schemaVersion:SCHEMA_VERSION, settings:defaultSettings(), trips:[], knownCrew:[], notDuplicates:[], defects:[], customSpecies:[], lastConditions:{}, backupAt:"" };
   }
   function textFields(obj, keys){ keys.forEach(function(k){ if(obj[k]==null) obj[k]=""; else if(typeof obj[k]!=="string") obj[k]=String(obj[k]); }); return obj; }
   function normaliseState(s){
@@ -115,6 +119,13 @@
     out.settings = Object.assign(defaultSettings(), isPlainObject(s.settings) ? s.settings : {});
     textFields(out.settings, SETTINGS_TEXT);
     out.knownCrew = (Array.isArray(s.knownCrew) ? s.knownCrew : []).filter(isPlainObject).map(function(c){ var x = textFields(splitKin(Object.assign({}, c)), CREW_TEXT); if(!x.id) x.id = uid(); return x; });
+    out.defects = (Array.isArray(s.defects) ? s.defects : []).filter(isPlainObject).map(function(d){
+      var x = textFields(Object.assign({}, d), DEFECT_TEXT); if(!x.id) x.id = uid();
+      if(DEFECT_CATS.indexOf(x.category)<0) x.category = x.category || "Deck";
+      if(x.status!=="closed") x.status = "open";
+      x.updates = (Array.isArray(d.updates) ? d.updates : []).filter(isPlainObject).map(function(u){ return textFields(Object.assign({}, u), ["at","trip","status","note"]); });
+      return x;
+    });
     out.notDuplicates = (Array.isArray(s.notDuplicates) ? s.notDuplicates : []).filter(function(k){ return typeof k==="string"; });
     out.lastConditions = isPlainObject(s.lastConditions) ? s.lastConditions : {};
     out.customSpecies = (Array.isArray(s.customSpecies) ? s.customSpecies : []).filter(function(c){ return isPlainObject(c) && c.code && c.name; })
@@ -144,6 +155,7 @@
       });
       trip.departure = textFields(Object.assign({}, isPlainObject(t.departure) ? t.departure : {}), DEP_TEXT);
       trip.landing = textFields(Object.assign({}, isPlainObject(t.landing) ? t.landing : {}), LAND_TEXT);
+      trip.defectsReviewedAt = typeof t.defectsReviewedAt === "string" ? t.defectsReviewedAt : "";
       trip.reportsAt = typeof t.reportsAt === "string" ? t.reportsAt : "";
       trip.crewConfirmedAt = typeof t.crewConfirmedAt === "string" ? t.crewConfirmedAt : "";
       trip.haccp = {};
@@ -406,7 +418,7 @@
   function go(screen, tripId){ view.screen = screen; if(tripId!==undefined) view.tripId = tripId; render(); window.scrollTo(0,0); }
   function render(){
     var trip = view.tripId ? getTrip(view.tripId) : null;
-    if(view.screen!=="trips" && !trip){ view.screen = "trips"; }
+    if(view.screen!=="trips" && view.screen!=="defects" && !trip){ view.screen = "trips"; }
     var fab = document.getElementById("fab");
     fab.classList.add("hidden"); fab.innerHTML = "";
     if(view.screen==="trips") renderTrips();
@@ -414,6 +426,7 @@
     else if(view.screen==="weights") renderWeights(trip);
     else if(view.screen==="crew") renderCrew(trip);
     else if(view.screen==="contracts") renderContracts(trip);
+    else if(view.screen==="defects") renderDefects(trip);
     else if(view.screen==="reports") renderReports(trip);
   }
   function setTopbar(title, sub){
@@ -528,6 +541,7 @@
       '<button class="btn btn-ghost" id="btnWeights">⚖ Weights ('+trip.weights.length+')</button>'+
       '<button class="btn btn-ghost" id="btnTanks">🧊 Tanks</button>'+
       '<button class="btn btn-ghost" id="btnReports">📄 Reports</button>'+
+      '<button class="btn btn-ghost" id="btnDefects">🔧 Defects ('+openDefects().length+')</button>'+
       '<button class="btn btn-ghost" id="btnTripEdit">✎ Trip details</button>'+
       (trip.ended ? '<span></span>' : '<button class="btn btn-ghost" id="btnEnd">⚓ End trip</button>')+
       '</div>';
@@ -567,6 +581,7 @@
     document.getElementById("btnWeights").onclick = function(){ go("weights"); };
     document.getElementById("btnReports").onclick = function(){ go("reports"); };
     document.getElementById("btnTanks").onclick = function(){ openTanksSheet(trip); };
+    document.getElementById("btnDefects").onclick = function(){ go("defects"); };
     document.getElementById("btnTripEdit").onclick = function(){ if(lockedGuard(trip)) return; openTripSheet(trip); };
     var be = document.getElementById("btnEnd"); if(be) be.onclick = function(){ openEndTripSheet(trip); };
     var br = document.getElementById("btnReopen"); if(br) br.onclick = function(){
@@ -611,6 +626,8 @@
       var signed = crew.filter(function(c){ return trip.contracts[c.id]; }).length;
       return [
         { key:"departure", label:"Departure check (bait, VMS, permit, fuel, water, RSW, FCO)", short:"Departure check", done: !!trip.departure.doneAt, sub: trip.departure.doneAt ? "done "+fmtTime(trip.departure.doneAt) : (trip.departure.fcoAt ? "FCO notified" : "") },
+        { key:"defects", label:"Defects review", short:"Defects review", done: !!trip.defectsReviewedAt || !openDefects().length,
+          sub: trip.defectsReviewedAt ? "reviewed "+fmtTime(trip.defectsReviewedAt) : (openDefects().length ? openDefects().length+" open to update" : "none open") },
         { key:"crew", label:"Crew list", short:"Crew list", done: !!(trip.crewConfirmedAt && trip.crew.length), sub: trip.crew.length ? personsOnBoard(trip)+" on board incl. skipper"+(trip.crewConfirmedAt?"":" — not confirmed") : "" },
         { key:"contracts", label:"Crew contracts signed", short:"Contracts", done: !!trip.crewConfirmedAt && signed===crew.length, sub: crew.length ? signed+" of "+crew.length+" signed" : "" }
       ];
@@ -629,6 +646,7 @@
     else if(key==="contracts") go("contracts");
     else if(key==="bait") openDepartureSheet(trip);
     else if(key==="departure") openDepartureSheet(trip);
+    else if(key==="defects") openDefectReview(trip);
     else if(key==="landing") openLandingSheet(trip);
     else if(key==="offtemps") openOffloadTemps(trip);
     else if(key==="weights") go("weights");
@@ -808,7 +826,8 @@
       if(!d.rswAt) missing.push("RSW running"); if(!d.fuel) missing.push("fuel"); if(!d.water) missing.push("water"); if(!d.fcoAt) missing.push("FCO notified");
       function finish(){
         d.doneAt = new Date().toISOString(); saveBait(); trip.departure = textFields(Object.assign({}, d), DEP_TEXT); saveState(); sh.close();
-        if(!trip.crewConfirmedAt){ go("crew"); showToast("Departure check done — now the crew list"); }
+        if(!trip.defectsReviewedAt && openDefects().length){ render(); openDefectReview(trip); showToast("Departure check done — now update the open defects"); }
+        else if(!trip.crewConfirmedAt){ go("crew"); showToast("Departure check done — now the crew list"); }
         else { render(); showToast("Departure check done — safe trip"); }
       }
       if(missing.length) showConfirm("Not done yet: "+missing.join(", ")+".\n\nSail anyway?", "Sail anyway", "btn-danger", finish); else finish();
@@ -1855,6 +1874,170 @@
     saveFileOut(fileName(trip, "crew_list", "pdf"), doc.output("blob"));
   }
 
+  // ================= Defects & maintenance =================
+  function openDefects(){ return state.defects.filter(function(d){ return d.status!=="closed"; }); }
+  function currentTripLabel(trip){ var t = trip || openTrip(); return t ? (t.tripNumber ? "Trip "+t.tripNumber : "Trip (no number)") : "Alongside"; }
+  var defectFilter = "open";
+  function renderDefects(trip){
+    var open = openDefects();
+    setTopbar("Defects & maintenance", open.length+" open · "+(state.defects.length-open.length)+" closed");
+    var el = document.getElementById("screen");
+    var html = backButton(trip ? tripLabel(trip) : "All trips")+
+      '<div class="actions"><button class="btn btn-accent" id="btnNewDefect">+ Raise defect</button><button class="btn btn-ghost" id="btnDefectPdf">📄 Running report</button></div>'+
+      (open.length ? '<button class="btn btn-ghost" id="btnReviewDefects" style="margin-bottom:12px;">✓ Update status of open defects</button>' : '')+
+      chips("dfilter", [{code:"open",label:"Open ("+open.length+")"},{code:"closed",label:"Closed"},{code:"all",label:"All"}], defectFilter);
+    var list = state.defects.filter(function(d){ return defectFilter==="all" || (defectFilter==="open" ? d.status!=="closed" : d.status==="closed"); });
+    if(!list.length) html += '<div class="empty"><div class="big">🔧</div>'+(defectFilter==="open" ? "No open defects." : "Nothing here yet.")+'</div>';
+    DEFECT_CATS.forEach(function(cat){
+      var items = list.filter(function(d){ return d.category===cat; });
+      if(!items.length) return;
+      html += '<div class="sectionlabel" style="font-size:15px;color:var(--text);">'+esc(cat)+' ('+items.length+')</div>';
+      items.sort(function(a,b){ return DEFECT_PRIORITY.indexOf(b.priority)-DEFECT_PRIORITY.indexOf(a.priority) || a.raisedAt.localeCompare(b.raisedAt); }).forEach(function(d){
+        var pr = d.priority==="Safety" ? "var(--danger)" : d.priority==="High" ? "var(--accent)" : "var(--surface-3)";
+        html += '<div class="lineitem" data-defect="'+d.id+'"><div class="num" style="background:'+pr+';font-size:12px;">'+({Low:"LOW",Medium:"MED",High:"HIGH",Safety:"⚠ SAFE"}[d.priority]||"–")+'</div><div class="meta">'+
+          '<div class="t1">'+esc(d.title)+' '+(d.status==="closed" ? '<span class="tag">CLOSED</span>' : '<span class="tag" style="background:var(--yellow);color:var(--yellow-ink);">OPEN</span>')+'</div>'+
+          '<div class="t2">Raised '+esc(fmtDay(d.raisedAt.slice(0,10)))+' · '+esc(d.raisedTrip)+(d.status==="closed" ? ' · closed '+esc(fmtDay(d.closedAt.slice(0,10)))+' · '+esc(d.closedTrip) : (d.updates.length ? ' · last update '+esc(d.updates[d.updates.length-1].trip) : ''))+'</div>'+
+          '</div><div class="chev">›</div></div>';
+      });
+    });
+    el.innerHTML = html;
+    wireBack(function(){ go(trip ? "trip" : "trips"); });
+    wireChips(el, function(n, v){ defectFilter = v || "open"; render(); });
+    document.getElementById("btnNewDefect").onclick = function(){ openDefectSheet(null, trip); };
+    document.getElementById("btnDefectPdf").onclick = buildDefectsPdf;
+    var rv = document.getElementById("btnReviewDefects"); if(rv) rv.onclick = function(){ openDefectReview(trip || openTrip()); };
+    el.querySelectorAll("[data-defect]").forEach(function(r){ r.onclick = function(){ openDefectSheet(state.defects.find(function(d){ return d.id===r.getAttribute("data-defect"); }), trip); }; });
+  }
+  function openDefectSheet(defect, trip){
+    if(storageLocked){ showToast("Saving is paused until the logbook problem is sorted (menu → Backup & restore)", true); return; }
+    var isNew = !defect;
+    var d = defect || { category:"", title:"", details:"", priority:"Medium", status:"open", updates:[] };
+    var html = '<h2>'+(isNew ? "Raise defect" : esc(d.title))+'</h2>'+
+      '<div class="sectionlabel">Area</div>'+chips("dcat", DEFECT_CATS, d.category)+
+      '<div style="margin-top:10px;">'+field("Defect / maintenance needed", "dTitle", d.title, "text", 'placeholder="e.g. port bilge pump not starting"')+'</div>'+
+      '<div class="field"><label for="dDetails">Details (optional)</label><textarea id="dDetails">'+esc(d.details)+'</textarea></div>'+
+      '<div class="sectionlabel">Priority</div>'+chips("dprio", DEFECT_PRIORITY, d.priority);
+    if(!isNew){
+      html += '<div class="sectionlabel">History</div><table class="tbl">'+
+        '<tr><td>'+esc(fmtDay(d.raisedAt.slice(0,10)))+'</td><td>'+esc(d.raisedTrip)+'</td><td>Raised'+(d.raisedBy?' by '+esc(d.raisedBy):'')+'</td></tr>'+
+        d.updates.map(function(u){ return '<tr><td>'+esc(fmtDay(u.at.slice(0,10)))+'</td><td>'+esc(u.trip)+'</td><td>'+(u.status==="closed"?"<b>Closed out</b>":"Still pending")+(u.note?' — '+esc(u.note):'')+'</td></tr>'; }).join("")+'</table>';
+    }
+    html += '<div class="sheet-foot">'+(isNew ? '<button class="btn btn-outline" data-a="cancel">Cancel</button>' :
+      (d.status==="closed" ? '<button class="btn btn-outline" data-a="reopen">Reopen</button>' : '<button class="btn btn-success" data-a="close">Close out</button>'))+
+      '<button class="btn btn-accent" data-a="save">'+(isNew?"Raise":"Save")+'</button></div>'+
+      (isNew ? '' : '<button class="btn btn-danger btn-sm" data-a="delete" style="margin-top:8px;">Delete (raised by mistake)</button>');
+    var sh = openSheet(html, { guard:function(){ return isNew && !!val(sh.sheet,"dTitle"); } });
+    var root = sh.sheet;
+    wireChips(root);
+    function read(){ d.category = chipValue(root,"dcat"); d.title = val(root,"dTitle"); d.details = val(root,"dDetails"); d.priority = chipValue(root,"dprio") || "Medium"; }
+    function ok(){ if(!chipValue(root,"dcat")){ showToast("Pick the area", true); return false; } if(!val(root,"dTitle")){ showToast("Describe the defect", true); return false; } return true; }
+    var c = root.querySelector('[data-a="cancel"]'); if(c) c.onclick = function(){ tryClose(sh.entry); };
+    root.querySelector('[data-a="save"]').onclick = function(){
+      if(!ok()) return; read();
+      if(isNew){
+        d.id = uid(); d.raisedAt = new Date().toISOString(); d.raisedTrip = currentTripLabel(trip); d.raisedBy = state.settings.skipper;
+        d.closedAt = ""; d.closedTrip = ""; d.closedNote = ""; textFields(d, DEFECT_TEXT);
+        state.defects.push(d);
+      }
+      saveState(); sh.close(); render(); showToast(isNew ? "Defect raised — "+d.category : "Saved");
+    };
+    var cl = root.querySelector('[data-a="close"]');
+    if(cl) cl.onclick = function(){
+      read();
+      var s2 = openSheet('<h2>Close out</h2>'+field("What was done (optional)", "cNote", "")+'<div class="sheet-foot"><button class="btn btn-outline" data-a="no">Cancel</button><button class="btn btn-success" data-a="yes">Close out</button></div>');
+      s2.sheet.querySelector('[data-a="no"]').onclick = s2.close;
+      s2.sheet.querySelector('[data-a="yes"]').onclick = function(){
+        setDefectStatus(d, "closed", val(s2.sheet,"cNote"), trip);
+        saveState(); s2.close(); sh.close(); render(); showToast("Closed out");
+      };
+    };
+    var ro = root.querySelector('[data-a="reopen"]');
+    if(ro) ro.onclick = function(){ setDefectStatus(d, "open", "reopened", trip); saveState(); sh.close(); render(); };
+    var del = root.querySelector('[data-a="delete"]');
+    if(del) del.onclick = function(){ showConfirm("Delete this defect and its history? To finish one off, use Close out instead.", "Delete", "btn-danger", function(){ state.defects = state.defects.filter(function(x){ return x!==d; }); saveState(); sh.close(); render(); }); };
+  }
+  function setDefectStatus(d, status, note, trip){
+    var at = new Date().toISOString(), tl = currentTripLabel(trip);
+    d.updates.push({ at:at, trip:tl, status:status, note:note||"" });
+    d.status = status;
+    if(status==="closed"){ d.closedAt = at; d.closedTrip = tl; d.closedNote = note||""; }
+    else { d.closedAt = ""; d.closedTrip = ""; d.closedNote = ""; }
+  }
+  // Start-of-trip review: every open defect is marked still pending or closed out.
+  function openDefectReview(trip){
+    var open = openDefects();
+    if(!open.length){
+      if(trip){ trip.defectsReviewedAt = new Date().toISOString(); saveState(); }
+      showToast("No open defects"); render(); return;
+    }
+    var html = '<h2>Defects review'+(trip ? ' — '+esc(tripLabel(trip)) : '')+'</h2><p class="helptext" style="margin:0 0 8px;">Mark each open defect. All start as still pending.</p>';
+    DEFECT_CATS.forEach(function(cat){
+      var items = open.filter(function(d){ return d.category===cat; });
+      if(!items.length) return;
+      html += '<div class="sectionlabel" style="font-size:15px;color:var(--text);">'+esc(cat)+'</div>';
+      items.forEach(function(d){
+        html += '<div class="card" style="padding:10px;"><b>'+esc(d.title)+'</b><div class="helptext" style="margin:2px 0 6px;">'+esc(d.priority)+' · raised '+esc(fmtDay(d.raisedAt.slice(0,10)))+' ('+esc(d.raisedTrip)+')</div>'+
+          '<div class="chiprow" data-chips="rv:'+d.id+'" data-required><div class="chip on" data-v="open">Still pending</div><div class="chip" data-v="closed">Closed out</div></div>'+
+          '<div class="field" style="margin:8px 0 0;"><input id="rvn_'+d.id+'" placeholder="Note (optional)"></div></div>';
+      });
+    });
+    html += '<div class="sheet-foot"><button class="btn btn-outline" data-a="cancel">Cancel</button><button class="btn btn-accent" data-a="save">Save review</button></div>';
+    var sh = openSheet(html);
+    wireChips(sh.sheet);
+    sh.sheet.querySelector('[data-a="cancel"]').onclick = sh.close;
+    sh.sheet.querySelector('[data-a="save"]').onclick = function(){
+      var closed = 0;
+      open.forEach(function(d){
+        var st = chipValue(sh.sheet, "rv:"+d.id) || "open";
+        setDefectStatus(d, st, val(sh.sheet, "rvn_"+d.id), trip);
+        if(st==="closed") closed++;
+      });
+      if(trip) trip.defectsReviewedAt = new Date().toISOString();
+      saveState(); sh.close();
+      showToast("Review saved — "+closed+" closed, "+(open.length-closed)+" pending");
+      if(trip && !trip.ended && !trip.crewConfirmedAt && view.screen==="trip"){ go("crew"); } else render();
+    };
+  }
+  function buildDefectsPdf(){
+    if(!window.jspdf){ showToast("PDF library missing", true); return; }
+    if(!state.defects.length){ showToast("No defects recorded yet", true); return; }
+    var s = state.settings;
+    var doc = new window.jspdf.jsPDF({ unit:"mm", format:"a4", orientation:"landscape" });
+    var W = 297, L = 10, y = 15;
+    function header(){
+      doc.setFont("helvetica","bold"); doc.setFontSize(14); doc.text("DEFECTS & MAINTENANCE — RUNNING REPORT — FV "+String(s.vessel).toUpperCase(), W/2, y, { align:"center" }); y += 6;
+      doc.setFont("helvetica","normal"); doc.setFontSize(9);
+      var open = openDefects().length;
+      doc.text(s.owner+"  ·  "+s.licenceNo+"  ·  printed "+fmtDate(todayISO())+"  ·  "+open+" open, "+(state.defects.length-open)+" closed", W/2, y, { align:"center" }); y += 7;
+    }
+    header();
+    var cols = [["Area",30],["Defect / maintenance",70],["Priority",17],["Raised",30],["Status",18],["Closed",30],["History",82]];
+    function head(){ var x = L; cols.forEach(function(c){ cellText(doc, c[0], x, y, c[1], 7, { bold:true, fill:[225,232,230], size:8.5 }); x += c[1]; }); y += 7; }
+    head();
+    var list = state.defects.slice().sort(function(a,b){ return (a.status==="closed")-(b.status==="closed") || DEFECT_CATS.indexOf(a.category)-DEFECT_CATS.indexOf(b.category) || a.raisedAt.localeCompare(b.raisedAt); });
+    list.forEach(function(d){
+      var hist = d.updates.map(function(u){ return fmtDate(u.at.slice(0,10)).slice(0,5)+" "+u.trip+": "+(u.status==="closed"?"closed":"pending")+(u.note?" ("+u.note+")":""); }).join("; ");
+      var vals = [d.category, d.title+(d.details?" — "+d.details:""), d.priority, fmtDate(d.raisedAt.slice(0,10))+"\n"+d.raisedTrip, d.status==="closed"?"Closed":"OPEN",
+        d.status==="closed" ? fmtDate(d.closedAt.slice(0,10))+"\n"+d.closedTrip : "", hist || "—"];
+      doc.setFontSize(8);
+      var lines = Math.max.apply(null, vals.map(function(v, j){ return String(v).split("\n").reduce(function(a, part){ return a + doc.splitTextToSize(part, cols[j][1]-2).length; }, 0); }));
+      var h = Math.max(8, lines*3.6+2.5);
+      if(y + h > 195){ doc.addPage(); y = 15; header(); head(); }
+      var x = L;
+      vals.forEach(function(v, j){
+        var fill = j===4 && d.status!=="closed" ? [255,236,200] : (j===2 && d.priority==="Safety" ? [255,215,205] : null);
+        if(fill){ doc.setFillColor(fill[0],fill[1],fill[2]); doc.rect(x, y, cols[j][1], h, "F"); }
+        doc.setDrawColor(150); doc.rect(x, y, cols[j][1], h);
+        doc.setFont("helvetica", j===4 ? "bold" : "normal"); doc.setFontSize(8);
+        var ls = []; String(v).split("\n").forEach(function(part){ ls = ls.concat(doc.splitTextToSize(part, cols[j][1]-2)); });
+        doc.text(ls, x+1, y+3.6);
+        x += cols[j][1];
+      });
+      y += h;
+    });
+    saveFileOut(todayISO().replace(/-/g,"")+"_antares_defects_report.pdf", doc.output("blob"));
+  }
+
   // ================= Crew contracts =================
   // Ntoza Fishing's voyage contract, word for word from the company's form.
   var CONTRACT_FINISH = "On completion of offload";
@@ -2190,12 +2373,14 @@
       '<button class="btn btn-ghost" data-a="backup">💾 Backup &amp; restore</button>'+
       '<button class="btn btn-ghost" data-a="crew">👥 Known crew ('+state.knownCrew.length+')</button>'+
       '<button class="btn btn-ghost" data-a="dups">🧹 Remove duplicate crew</button>'+
+      '<button class="btn btn-ghost" data-a="defects">🔧 Defects &amp; maintenance ('+openDefects().length+' open)</button>'+
       '</div><div class="sheet-foot"><button class="btn btn-outline" data-a="close">Close</button></div>');
     sh.sheet.querySelector('[data-a="close"]').onclick = sh.close;
     sh.sheet.querySelector('[data-a="settings"]').onclick = function(){ sh.close(); openSettings(); };
     sh.sheet.querySelector('[data-a="backup"]').onclick = function(){ sh.close(); openBackupSheet(); };
     sh.sheet.querySelector('[data-a="crew"]').onclick = function(){ sh.close(); openKnownCrew(); };
     sh.sheet.querySelector('[data-a="dups"]').onclick = function(){ sh.close(); openDuplicatesSheet(); };
+    sh.sheet.querySelector('[data-a="defects"]').onclick = function(){ sh.close(); go("defects"); };
   }
   function openSettings(){
     var s = state.settings;
@@ -2275,6 +2460,7 @@
   function handleBack(){
     if(openSheets.length){ tryClose(openSheets[openSheets.length-1]); return; }
     if(view.screen==="contracts"){ go("crew"); return; }
+    if(view.screen==="defects"){ go(view.tripId ? "trip" : "trips"); return; }
     if(view.screen==="weights" || view.screen==="crew" || view.screen==="reports"){ go("trip"); return; }
     if(view.screen==="trip"){ go("trips", null); return; }
     showConfirm("Close the logbook?", "Close", "btn-accent", function(){
