@@ -640,6 +640,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     stopSpecies:"ALB,YFT,BET"
   }; }
   var SETTINGS_TEXT = Object.keys(defaultSettings());
+  var SKIPPER_TEXT = ["id","name","idNumber","contact"];
   var TRIP_TEXT = ["tripNumber","sailDate","sailTime","dischargeDate","notes"];
   // Departure check: each tick stores the time it was ticked. No ice: the boat has RSW.
   var DEP_TEXT = ["vmsOnAt","vmsConfirmedAt","vmsHow","permitAt","rswAt","rswTemp","fuel","water","fcoAt","fcoHow","fcoRef","doneAt"];
@@ -712,7 +713,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
   var storageLocked = false;
   var loadProblem = null;
   function emptyState(){
-    return { schemaVersion:SCHEMA_VERSION, settings:defaultSettings(), trips:[], knownCrew:[], notDuplicates:[], defects:[], customSpecies:[], lastConditions:{}, backupAt:"" };
+    return { schemaVersion:SCHEMA_VERSION, settings:defaultSettings(), trips:[], knownCrew:[], knownSkippers:[], notDuplicates:[], defects:[], customSpecies:[], lastConditions:{}, backupAt:"" };
   }
   function textFields(obj, keys){ keys.forEach(function(k){ if(obj[k]==null) obj[k]=""; else if(typeof obj[k]!=="string") obj[k]=String(obj[k]); }); return obj; }
   function normaliseState(s){
@@ -721,6 +722,9 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     out.settings = Object.assign(defaultSettings(), isPlainObject(s.settings) ? s.settings : {});
     textFields(out.settings, SETTINGS_TEXT);
     out.knownCrew = (Array.isArray(s.knownCrew) ? s.knownCrew : []).filter(isPlainObject).map(function(c){ var x = textFields(splitKin(Object.assign({}, c)), CREW_TEXT); if(!x.id) x.id = uid(); return x; });
+    out.knownSkippers = (Array.isArray(s.knownSkippers) ? s.knownSkippers : []).filter(isPlainObject).map(function(k){ var x = textFields(Object.assign({}, k), SKIPPER_TEXT); if(!x.id) x.id = uid(); return x; }).filter(function(k){ return k.name; });
+    // Before skippers were chosen per trip, the skipper lived in the vessel settings.
+    if(!out.knownSkippers.length && out.settings.skipper) out.knownSkippers.push({ id:"skp1", name:out.settings.skipper, idNumber:out.settings.skipperId, contact:out.settings.contact });
     out.defects = (Array.isArray(s.defects) ? s.defects : []).filter(isPlainObject).map(function(d){
       var x = textFields(Object.assign({}, d), DEFECT_TEXT); if(!x.id) x.id = uid();
       if(DEFECT_CATS.indexOf(x.category)<0) x.category = x.category || "Deck";
@@ -762,6 +766,8 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
       trip.crewConfirmedAt = typeof t.crewConfirmedAt === "string" ? t.crewConfirmedAt : "";
       trip.haccp = {};
       if(isPlainObject(t.haccp)) Object.keys(t.haccp).forEach(function(d){ var h = normaliseHaccp(t.haccp[d]); if(h) trip.haccp[d] = h; });
+      var sk = isPlainObject(t.skipper) && t.skipper.name ? t.skipper : { name:out.settings.skipper, idNumber:out.settings.skipperId, contact:out.settings.contact };
+      trip.skipper = textFields({ name:sk.name, idNumber:sk.idNumber, contact:sk.contact }, SKIPPER_TEXT.slice(1));
       trip.skipperSig = typeof t.skipperSig === "string" && /^data:image\/png;base64,/.test(t.skipperSig) ? t.skipperSig : "";
       trip.days = {};
       if(isPlainObject(t.days)) Object.keys(t.days).forEach(function(k){ if(isPlainObject(t.days[k])) trip.days[k] = textFields(Object.assign({}, t.days[k]), DAY_TEXT); });
@@ -850,6 +856,13 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     var list = trip.weights.filter(function(w){ return w.sp===sp && num(w.kg)>0; });
     var total = list.reduce(function(a,w){ return a+num(w.kg); }, 0);
     return { n:list.length, kg:total, avg:list.length ? total/list.length : 0 };
+  }
+  function skipperOf(trip){ return (trip && trip.skipper && trip.skipper.name) ? trip.skipper : { name:state.settings.skipper, idNumber:state.settings.skipperId, contact:state.settings.contact }; }
+  // Saves a skipper for future trips: same ID or same name updates the saved record.
+  function rememberSkipper(sk){
+    var k = state.knownSkippers.find(function(x){ return (normId(x.idNumber) && normId(x.idNumber)===normId(sk.idNumber)) || (normName(x.name)===normName(sk.name)); });
+    if(k){ ["name","idNumber","contact"].forEach(function(f){ if(sk[f]) k[f] = sk[f]; }); return k; }
+    k = { id:uid(), name:sk.name, idNumber:sk.idNumber||"", contact:sk.contact||"" }; state.knownSkippers.push(k); return k;
   }
   function crewOnly(trip){ return trip.crew.filter(function(c){ return c.role!=="Skipper"; }); }
   function personsOnBoard(trip){ return crewOnly(trip).length + 1; }
@@ -1079,19 +1092,37 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     var isNew = !trip;
     var last = state.trips.slice().sort(function(a,b){ return b.createdAt-a.createdAt; })[0];
     var t = trip || { tripNumber: last && /^\d+$/.test(last.tripNumber) ? String(int(last.tripNumber)+1) : "", sailDate: todayISO(), sailTime: nowHM(), dischargeDate:"", notes:"" };
+    // New trips start with the last trip's skipper selected.
+    var curSk = trip ? skipperOf(trip) : (last ? skipperOf(last) : (state.knownSkippers[0] || { name:"", idNumber:"", contact:"" }));
     var s = openSheet(
       '<h2>'+(isNew?"New trip":"Trip details")+'</h2>'+
       '<div class="grid2">'+field("Trip number (DFFE)", "tTripNo", t.tripNumber, "text", 'inputmode="numeric"')+field("Discharge date", "tDis", t.dischargeDate, "date")+'</div>'+
       '<div class="grid2">'+field("Sailing date", "tSail", t.sailDate, "date")+field("Sailing time", "tSailTime", t.sailTime, "time")+'</div>'+
+      '<div class="sectionlabel">Skipper for this trip</div>'+
+      '<div class="chiprow" id="skList">'+state.knownSkippers.map(function(k){ return '<div class="chip'+(normName(k.name)===normName(curSk.name)?' on':'')+'" data-sk="'+esc(k.id)+'">'+esc(k.name)+'</div>'; }).join("")+'<div class="chip" data-sk="new">+ New skipper</div></div>'+
+      field("Skipper name", "tSkName", curSk.name)+
+      '<div class="grid2">'+field("Skipper ID number", "tSkId", curSk.idNumber)+field("Skipper contact", "tSkTel", curSk.contact, "tel")+'</div>'+
       (isNew && last && last.crew.length ? '<p class="helptext">The crew list from '+esc(tripLabel(last))+' ('+last.crew.length+') is brought over for you to check and confirm.</p>' : '')+
       '<div class="field"><label for="tNotes">Notes</label><textarea id="tNotes">'+esc(t.notes)+'</textarea></div>'+
+      (isNew ? '' : '<button class="btn btn-danger" data-a="deltrip" style="width:100%;margin-top:6px;">🗑 Delete this trip</button>')+
       '<div class="sheet-foot"><button class="btn btn-outline" data-a="cancel">Cancel</button><button class="btn btn-accent" data-a="save">'+(isNew?"Start trip":"Save")+'</button></div>'
     );
     s.sheet.querySelector('[data-a="cancel"]').onclick = s.close;
+    var dt = s.sheet.querySelector('[data-a="deltrip"]'); if(dt) dt.onclick = function(){ s.close(); openDeleteTrip(trip); };
+    s.sheet.querySelector("#skList").addEventListener("click", function(e){
+      var c = e.target.closest("[data-sk]"); if(!c) return;
+      s.sheet.querySelectorAll("#skList .chip").forEach(function(x){ x.classList.toggle("on", x===c); });
+      var k = state.knownSkippers.find(function(x){ return x.id===c.getAttribute("data-sk"); }) || { name:"", idNumber:"", contact:"" };
+      s.sheet.querySelector("#tSkName").value = k.name; s.sheet.querySelector("#tSkId").value = k.idNumber; s.sheet.querySelector("#tSkTel").value = k.contact;
+      if(!k.name) s.sheet.querySelector("#tSkName").focus();
+    });
     s.sheet.querySelector('[data-a="save"]').onclick = function(){
       var no = val(s.sheet,"tTripNo");
       var clash = state.trips.find(function(x){ return x!==trip && no && x.tripNumber===no; });
       if(clash){ showToast("Trip "+no+" already exists", true); return; }
+      var sk = { name:val(s.sheet,"tSkName"), idNumber:val(s.sheet,"tSkId"), contact:val(s.sheet,"tSkTel") };
+      if(!sk.name){ showToast("Choose or enter the skipper", true); return; }
+      var skChanged = !isNew && normName(sk.name)!==normName(skipperOf(trip).name);
       if(isNew){
         trip = { id:uid(), createdAt:Date.now(), ended:false, crew:[], stops:[], days:{}, weights:[], haccp:{}, skipperSig:"", crewConfirmedAt:"", contracts:{}, bait:{ boxKg:"", baitType:"", entries:[] }, departure:textFields({}, DEP_TEXT), landing:textFields({}, LAND_TEXT) };
         if(last && last.crew.length) trip.crew = last.crew.map(function(c){ return Object.assign({}, c, { id:uid() }); });
@@ -1099,11 +1130,36 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
       }
       trip.tripNumber = no; trip.sailDate = val(s.sheet,"tSail"); trip.sailTime = val(s.sheet,"tSailTime");
       trip.dischargeDate = val(s.sheet,"tDis"); trip.notes = val(s.sheet,"tNotes");
+      trip.skipper = { name:sk.name, idNumber:sk.idNumber, contact:sk.contact };
+      rememberSkipper(sk);
+      // A different skipper must sign for the trip themselves.
+      if(skChanged) trip.skipperSig = "";
       saveState(); s.close();
-      if(!isNew){ render(); return; }
+      if(!isNew){
+        if(skChanged){ captureSkipperSig(trip); return; }
+        render(); return;
+      }
       // Start of trip: skipper signs once, then checks the crew list.
       view.tripId = trip.id;
       captureSkipperSig(trip, function(){ go("trip", trip.id); openDepartureSheet(trip); });
+    };
+  }
+
+  function openDeleteTrip(trip){
+    if(storageLocked){ lockedGuard(trip); return; }
+    var word = trip.tripNumber || "DELETE";
+    var what = [trip.stops.length+" stops", trip.weights.length+" weights", crewOnly(trip).length+" crew", Object.keys(trip.contracts).length+" signed contracts", Object.keys(trip.haccp).length+" HACCP checks"].join(", ");
+    var sh = openSheet('<h2>Delete '+esc(tripLabel(trip))+'?</h2>'+
+      '<p class="sheet-text">This removes the whole trip from the phone: '+esc(what)+'. It can\'t be undone — only a backup can bring it back.</p>'+
+      '<button class="btn btn-ghost" data-a="backup" style="width:100%;margin-bottom:10px;">💾 Back up first</button>'+
+      field("Type "+word+" to confirm", "delWord", "", "text", trip.tripNumber ? 'inputmode="numeric"' : 'autocapitalize="characters"')+
+      '<div class="sheet-foot"><button class="btn btn-outline" data-a="cancel">Cancel</button><button class="btn btn-danger" data-a="del">Delete trip</button></div>');
+    sh.sheet.querySelector('[data-a="cancel"]').onclick = sh.close;
+    sh.sheet.querySelector('[data-a="backup"]').onclick = exportBackup;
+    sh.sheet.querySelector('[data-a="del"]').onclick = function(){
+      if(val(sh.sheet,"delWord").toUpperCase()!==word.toUpperCase()){ showToast("Type "+word+" to delete", true); return; }
+      state.trips = state.trips.filter(function(t){ return t!==trip; });
+      if(saveState()){ sh.close(); showToast(tripLabel(trip)+" deleted"); go("trips", null); }
     };
   }
 
@@ -1312,7 +1368,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
       "Vessel: FV "+String(s.vessel).toUpperCase()+" ("+s.licenceNo+")",
       "Right/permit: "+s.rightNo+" / "+s.permitNo+" — tuna pole-line",
       "Owner: "+s.owner,
-      "Skipper: "+s.skipper+" "+s.contact,
+      "Skipper: "+skipperOf(trip).name+" "+skipperOf(trip).contact,
       "Departing: "+(s.crewListPort||s.port)+", "+fmtDate(trip.sailDate)+(trip.sailTime?" "+trip.sailTime:""),
       "Trip no.: "+(trip.tripNumber||"—"),
       "Persons on board: "+personsOnBoard(trip)+" (incl. skipper)"+(trip.crewConfirmedAt ? "" : " — crew list not yet confirmed"),
@@ -1327,7 +1383,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     return ["LANDING NOTIFICATION",
       "Vessel: FV "+String(s.vessel).toUpperCase()+" ("+s.licenceNo+")",
       "Right/permit: "+s.rightNo+" / "+s.permitNo,
-      "Skipper: "+s.skipper+" "+s.contact,
+      "Skipper: "+skipperOf(trip).name+" "+skipperOf(trip).contact,
       "Trip no.: "+(trip.tripNumber||"—")+", sailed "+fmtDate(trip.sailDate),
       "ETA: "+(l.port||s.crewListPort||s.port)+", "+fmtDate(l.eta)+(l.etaTime?" "+l.etaTime:""),
       "Catch on board (count): "+catchTxt,
@@ -1460,7 +1516,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     var doc = new window.jspdf.jsPDF({ unit:"mm", format:"a4" });
     var L = 18, y = 18;
     doc.setFont("helvetica","bold"); doc.setFontSize(15); doc.text("DEPARTURE & LANDING RECORD — FV "+String(s.vessel).toUpperCase(), 105, y, { align:"center" }); y += 7;
-    doc.setFont("helvetica","normal"); doc.setFontSize(10); doc.text(tripLabel(trip)+"  ·  "+s.licenceNo+"  ·  Skipper "+s.skipper, 105, y, { align:"center" }); y += 10;
+    doc.setFont("helvetica","normal"); doc.setFontSize(10); doc.text(tripLabel(trip)+"  ·  "+s.licenceNo+"  ·  Skipper "+skipperOf(trip).name, 105, y, { align:"center" }); y += 10;
     function row(k, v){ doc.setFont("helvetica","bold"); doc.text(k, L, y); doc.setFont("helvetica","normal"); doc.text(String(v||"—"), L+62, y); y += 6.5; }
     function hd(t){ y += 3; doc.setFont("helvetica","bold"); doc.setFontSize(12); doc.text(t, L, y); doc.setFontSize(10); y += 7; }
     hd("Departure check");
@@ -1549,7 +1605,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     var W = 210, L = 14, y = 16;
     doc.setFont("helvetica","bold"); doc.setFontSize(15); doc.text("DAILY REPORT — FV "+String(s.vessel).toUpperCase(), W/2, y, { align:"center" }); y += 7;
     doc.setFontSize(11); doc.setFont("helvetica","normal");
-    doc.text(fmtDay(date)+" "+date.slice(0,4)+"   ·   "+tripLabel(trip)+"   ·   Skipper "+s.skipper, W/2, y, { align:"center" }); y += 9;
+    doc.text(fmtDay(date)+" "+date.slice(0,4)+"   ·   "+tripLabel(trip)+"   ·   Skipper "+skipperOf(trip).name, W/2, y, { align:"center" }); y += 9;
     var info = [];
     if(hasWeather(trip, date)) info.push(["Weather", (weatherText(trip.days[date]) || trip.days[date].wxNote)+(trip.days[date].wxTime?" ("+trip.days[date].wxTime+")":"")]);
     if(d.info.sst) info.push(["SST", d.info.sst+" °C"]);
@@ -1830,7 +1886,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     };
   }
   function captureSkipperSig(trip, after){
-    openSignatureSheet("Skipper signature", state.settings.skipper+" — signs the documents for "+tripLabel(trip)+".", function(data){
+    openSignatureSheet("Skipper signature", skipperOf(trip).name+" — signs the documents for "+tripLabel(trip)+".", function(data){
       trip.skipperSig = data; saveState(); showToast("Signature saved"); if(after) after(); else render();
     });
   }
@@ -1941,7 +1997,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
   }
   function haccpDefaults(trip, date){
     var prev = lastHaccp(trip, date);
-    var h = { san:{}, dailyTemp:"", inspectedBy:state.settings.skipper, doneAt:"", fish:[] };
+    var h = { san:{}, dailyTemp:"", inspectedBy:skipperOf(trip).name, doneAt:"", fish:[] };
     SAN_OPS.concat(SAN_STORE).forEach(function(q){ h.san[q] = (prev && prev.san[q]) || "Y"; });
     if(prev && prev.inspectedBy) h.inspectedBy = prev.inspectedBy;
     var list = stopsOn(trip, date);
@@ -1990,7 +2046,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     if(!h.fish.length) html += '<p class="helptext">No fish logged on this day.</p>';
     html += '<div class="sectionlabel" style="font-size:15px;color:var(--text);">Operation and sanitation</div>'+sanRows(SAN_OPS)+
       '<div class="sectionlabel" style="font-size:15px;color:var(--text);">Storage</div>'+sanRows(SAN_STORE)+
-      '<div style="margin-top:10px;">'+field("Daily temp inspected by", "hBy", h.inspectedBy || state.settings.skipper)+'</div>'+
+      '<div style="margin-top:10px;">'+field("Daily temp inspected by", "hBy", h.inspectedBy || skipperOf(trip).name)+'</div>'+
       '<p class="helptext">Offloading temperatures are added on discharge day (Reports → HACCP).</p>'+
       '<div class="sheet-foot"><button class="btn btn-outline" data-a="cancel">Cancel</button><button class="btn btn-accent" data-a="save">Save check</button></div>';
     var sh = openSheet(html, { guard:function(){ return dirty; } });
@@ -2013,7 +2069,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
           else { var el = root.querySelector("#f"+i+"_"+x.k); if(el) f[x.k] = el.value.trim(); }
         });
       });
-      h.inspectedBy = val(root,"hBy") || state.settings.skipper; h.doneAt = new Date().toISOString();
+      h.inspectedBy = val(root,"hBy") || skipperOf(trip).name; h.doneAt = new Date().toISOString();
       trip.haccp[date] = normaliseHaccp(h);
       saveState(); sh.close(); showToast("End-of-day check saved");
       if(after) after(); else render();
@@ -2053,7 +2109,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     if(date){ doc.setFont("helvetica","normal"); doc.setFontSize(9); doc.text("Date: "+date, x, lineY + 10); }
     doc.setFont("helvetica","normal"); doc.setFontSize(10);
   }
-  function skipperSignature(doc, trip, x, date, label){ signatureAt(doc, x, label || "Skipper signature", trip.skipperSig, state.settings.skipper, date); }
+  function skipperSignature(doc, trip, x, date, label){ signatureAt(doc, x, label || "Skipper signature", trip.skipperSig, skipperOf(trip).name, date); }
   function pdfHeader(doc, title, trip, pageW){
     doc.setFont("helvetica","bold"); doc.setFontSize(14);
     var tl = title.indexOf("\n")>=0 ? title.split("\n") : doc.splitTextToSize(title, pageW-30);
@@ -2111,7 +2167,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
       for(i=0;i<7;i++) cellText(doc, "", x0+qW+i*2*cW, y, 2*cW, rh, { fill:[235,235,235] });
       y += rh;
       cellText(doc, "Inspected by:", x0, y, qW, rh+4, { left:true, bold:true });
-      for(i=0;i<7;i++) cellText(doc, ds[i] ? (trip.haccp[ds[i]].inspectedBy || state.settings.skipper) : "", x0+qW+i*2*cW, y, 2*cW, rh+4, { size:6.5 });
+      for(i=0;i<7;i++) cellText(doc, ds[i] ? (trip.haccp[ds[i]].inspectedBy || skipperOf(trip).name) : "", x0+qW+i*2*cW, y, 2*cW, rh+4, { size:6.5 });
       skipperSignature(doc, trip, x0);
     }
     saveFileOut(fileName(trip, "haccp_sanitation", "pdf"), doc.output("blob"));
@@ -2196,7 +2252,9 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
           '<div class="rsum">'+kg(rowKg)+' kg</div></div>';
       }
     });
+    if(trip.weights.length) html += '<button class="btn btn-ghost btn-big" id="btnWeighPdf2" style="margin-top:14px;">📄 Weigh sheet (PDF)</button>';
     el.innerHTML = html;
+    var wp = document.getElementById("btnWeighPdf2"); if(wp) wp.onclick = function(){ buildWeighSheetPdf(trip); };
     wireBack(function(){ go("trip"); });
     wireChips(el, function(name, v){
       if(v==="__more"){ pickSpecies(sps.map(function(x){ return x.code; }), function(code){ wsSpecies = code; render(); }); render(); return; }
@@ -2458,7 +2516,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     function kv(x, y, k, v){ doc.setFont("helvetica","bold"); doc.text(k, x, y); var w = doc.getTextWidth(k+" "); doc.setFont("helvetica","normal"); doc.text(String(v||""), x+w, y); return x + w + doc.getTextWidth(String(v||"")) + 8; }
     var x = kv(14, 25, "Owner/Operator:", s.owner); x = kv(x, 25, "Official/Licence No.:", s.licenceNo); kv(x, 25, "Port:", s.crewListPort || s.port);
     x = kv(14, 32, "Trip No.:", trip.tripNumber); x = kv(x, 32, "Departure:", fmtDate(trip.sailDate)+(trip.sailTime?", "+trip.sailTime:"")+", "+(s.crewListPort||s.port)); kv(x, 32, "Persons on board (incl. skipper):", String(personsOnBoard(trip)));
-    x = kv(14, 41, "Skipper:", s.skipper); x = kv(x, 41, "ID No.:", s.skipperId); kv(x, 41, "Contact:", s.contact);
+    x = kv(14, 41, "Skipper:", skipperOf(trip).name); x = kv(x, 41, "ID No.:", skipperOf(trip).idNumber); kv(x, 41, "Contact:", skipperOf(trip).contact);
     var cols = [["#",10],["Name",32],["Surname",32],["Nat.",16],["ID / Passport No.",44],["Position",28],["Contact",30],["Next of kin",42],["Next of kin no.",35]];
     var y = 48, rh = 9, x0 = 14;
     x = x0;
@@ -2540,7 +2598,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     root.querySelector('[data-a="save"]').onclick = function(){
       if(!ok()) return; read();
       if(isNew){
-        d.id = uid(); d.raisedAt = new Date().toISOString(); d.raisedTrip = currentTripLabel(trip); d.raisedBy = state.settings.skipper;
+        d.id = uid(); d.raisedAt = new Date().toISOString(); d.raisedTrip = currentTripLabel(trip); d.raisedBy = skipperOf(trip).name;
         d.closedAt = ""; d.closedTrip = ""; d.closedNote = ""; textFields(d, DEFECT_TEXT);
         state.defects.push(d);
       }
@@ -2781,6 +2839,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
       '<button class="btn btn-ghost" id="btnContractsPdf">Crew contracts (PDF)</button>'+
       '<button class="btn btn-ghost" id="btnDepPdf">Departure &amp; landing record (PDF)</button>'+
       '<button class="btn btn-ghost" id="btnStopsCsv">Stop log (CSV)</button>'+
+      '<button class="btn btn-ghost" id="btnWeighPdf">Weigh sheet (PDF)</button>'+
       '<button class="btn btn-ghost" id="btnWeightsCsv">Weight sheet (CSV)</button>'+
       (trip.skipperSig ? '' : '<button class="btn btn-outline" id="btnSignR">✍ Add skipper signature</button>')+
       '</div></div>';
@@ -2788,6 +2847,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     wireBack(function(){ go("trip"); });
     document.getElementById("btnDffe").onclick = function(){ buildDffeXlsx(trip).then(function(blob){ return saveFileOut(fileName(trip,"dffe_catch_stats","xlsx"), blob); }).catch(function(e){ console.error(e); showToast("Could not make the DFFE form: "+e.message, true); }); };
     document.getElementById("btnStopsCsv").onclick = function(){ saveFileOut(fileName(trip,"stop_log","csv"), new Blob([stopsCsv(trip)], { type:"text/csv" })); };
+    document.getElementById("btnWeighPdf").onclick = function(){ buildWeighSheetPdf(trip); };
     document.getElementById("btnWeightsCsv").onclick = function(){ saveFileOut(fileName(trip,"weights","csv"), new Blob([weightsCsv(trip)], { type:"text/csv" })); };
     document.getElementById("btnCrewPdf2").onclick = function(){ buildCrewPdf(trip); };
     document.getElementById("btnContractsPdf").onclick = function(){ buildContractsPdf(trip, null); };
@@ -2852,6 +2912,52 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     });
     return toCsv(rows);
   }
+  function buildWeighSheetPdf(trip){
+    if(!window.jspdf){ showToast("PDF library missing", true); return; }
+    if(!trip.weights.length){ showToast("No weights entered yet", true); return; }
+    var s = state.settings, doc = new window.jspdf.jsPDF({ unit:"mm", format:"a4" });
+    var L = 12, W = 210, cols = 10, cw = (W-2*L)/cols, rh = 7;
+    var bottom = 297 - SIG_SPACE - 10, y;
+    function header(){
+      doc.setFont("helvetica","bold"); doc.setFontSize(15); doc.text("OFFLOAD WEIGH SHEET — FV "+String(s.vessel).toUpperCase(), W/2, 15, { align:"center" });
+      doc.setFont("helvetica","normal"); doc.setFontSize(10);
+      doc.text(tripLabel(trip)+"  ·  "+s.licenceNo+"  ·  Skipper "+skipperOf(trip).name, W/2, 21, { align:"center" });
+      doc.text("Sailed "+fmtDate(trip.sailDate)+"   ·   Discharged "+(fmtDate(trip.dischargeDate)||"—")+" at "+((trip.landing && trip.landing.port)||s.port), W/2, 26, { align:"center" });
+      y = 34;
+    }
+    function newPage(){ skipperSignature(doc, trip, L); doc.addPage(); header(); }
+    header();
+    var species = allSpecies().filter(function(sp){ return trip.weights.some(function(w){ return w.sp===sp.code; }); });
+    var grand = { n:0, kg:0 };
+    species.forEach(function(sp){
+      var list = trip.weights.filter(function(w){ return w.sp===sp.code; });
+      var st = weightStats(trip, sp.code), kgs = list.map(function(w){ return num(w.kg); }).filter(function(v){ return v>0; });
+      if(y + 8 + 2*rh > bottom) newPage();
+      doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.text(sp.name+" ("+sp.code+")", L, y+4); y += 7;
+      doc.setFontSize(9);
+      for(var i=0;i<list.length;i+=cols){
+        if(y + rh > bottom){ newPage(); doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.text(sp.name+" ("+sp.code+") continued", L, y+4); y += 7; doc.setFontSize(9); }
+        for(var j=0;j<cols;j++){
+          var x = L + j*cw, w = list[i+j];
+          doc.setDrawColor(150); doc.rect(x, y, cw, rh);
+          if(w){
+            doc.setFont("helvetica","normal"); doc.setTextColor(120); doc.setFontSize(6.5); doc.text(String(i+j+1), x+1, y+2.6);
+            doc.setTextColor(0); doc.setFontSize(9.5); doc.text(kg(num(w.kg)), x+cw-1.5, y+5.2, { align:"right" });
+          }
+        }
+        y += rh;
+      }
+      doc.setFont("helvetica","bold"); doc.setFontSize(9.5);
+      doc.text(st.n+" fish   ·   "+kg(st.kg)+" kg   ·   avg "+kg(st.avg)+" kg"+(kgs.length ? "   ·   min "+kg(Math.min.apply(null,kgs))+"   ·   max "+kg(Math.max.apply(null,kgs)) : ""), L, y+5);
+      y += 12; grand.n += st.n; grand.kg += st.kg;
+    });
+    if(y + 10 > bottom) newPage();
+    doc.setDrawColor(0); doc.line(L, y, W-L, y);
+    doc.setFont("helvetica","bold"); doc.setFontSize(11);
+    doc.text("TOTAL: "+grand.n+" fish   ·   "+kg(grand.kg)+" kg", L, y+6);
+    skipperSignature(doc, trip, L, fmtDate(trip.dischargeDate || todayISO()));
+    return saveFileOut(fileName(trip, "weigh_sheet", "pdf"), doc.output("blob"));
+  }
   function weightsCsv(trip){
     var rows = [["Trip","No.","Species","Weight kg","Fork length cm"]];
     var n = {};
@@ -2907,8 +3013,8 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
       var put = function(ref, v){ setCell(doc, ref, v); };
       put("M3", s.observer||"N"); put("S3", s.vessel); put("Z3", MONTHS[int(first.slice(5,7))-1] || "");
       put("L4", s.rightsHolder); put("S4", s.registrationNo); put("Z4", int(first.slice(0,4)));
-      put("M5", s.rightNo); put("S5", s.skipper); put("Z5", fmtDate(trip.sailDate));
-      put("M6", s.permitNo); put("S6", s.contact); put("Z6", fmtDate(trip.dischargeDate));
+      put("M5", s.rightNo); put("S5", skipperOf(trip).name); put("Z5", fmtDate(trip.sailDate));
+      put("M6", s.permitNo); put("S6", skipperOf(trip).contact); put("Z6", fmtDate(trip.dischargeDate));
       put("S7", s.email); put("Z7", s.port);
       var tripNo = trip.tripNumber ? (/^\d+$/.test(trip.tripNumber) ? int(trip.tripNumber) : trip.tripNumber) : "";
       var sps = dffeSpecies(trip);
@@ -2953,7 +3059,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
         (a.n ? " Offload: "+sps.filter(function(sp){ return weightStats(trip, sp.code).n; }).map(function(sp){ var st = weightStats(trip, sp.code); return st.n+" "+sp.code+" "+kg(st.kg)+" kg"; }).join(", ")+". Daily kg = daily count x offload average." : "")+
         " Position = first stop of each day.";
       put("A46", comment);
-      put("S56", s.skipper); put("AA56", fmtDate(trip.dischargeDate || todayISO()));
+      put("S56", skipperOf(trip).name); put("AA56", fmtDate(trip.dischargeDate || todayISO()));
       var xml = new XMLSerializer().serializeToString(doc);
       if(!/^<\?xml/.test(xml)) xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' + xml;
       files[path] = F.strToU8(xml);
@@ -2987,7 +3093,8 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
         item("btnWeights", "⚖", "Weigh sheet", trip.weights.length || "", cur==="weights")+
         item("btnReports", "📄", "Reports", "", cur==="reports")+
         item("btnTripEdit", "✎", "Trip details", "", false)+
-        (trip.ended ? (trip.landing.fcoAt ? '' : item("btnLandingNav", "📣", "Landing notice", "!", false)) : item("btnEnd", "🏁", "End trip", "", false));
+        (trip.ended ? (trip.landing.fcoAt ? '' : item("btnLandingNav", "📣", "Landing notice", "!", false)) : item("btnEnd", "🏁", "End trip", "", false))+
+        item("btnDeleteTrip", "🗑", "Delete trip", "", false);
     }
     html += '<div class="dsec">Vessel</div>'+
       item("btnAllTrips", "🗂", "All trips", state.trips.length, cur==="trips")+
@@ -3007,6 +3114,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     on("btnTanks", function(){ openTanksSheet(trip); });
     on("btnWeights", function(){ go("weights", trip.id); });
     on("btnReports", function(){ go("reports", trip.id); });
+    on("btnDeleteTrip", function(){ openDeleteTrip(trip); });
     on("btnTripEdit", function(){ if(lockedGuard(trip)) return; openTripSheet(trip); });
     on("btnEnd", function(){ go("trip", trip.id); openEndTripSheet(trip); });
     on("btnLandingNav", function(){ go("trip", trip.id); openLandingSheet(trip); });
@@ -3021,7 +3129,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
   function closeDrawer(){ var w = document.getElementById("drawerWrap"); w.classList.remove("open"); w.setAttribute("aria-hidden","true"); }
   function openSettings(){
     var s = state.settings;
-    var f = [["Vessel name","vessel"],["Vessel reg no. (DFFE form)","registrationNo"],["Rights holder","rightsHolder"],["Right application no.","rightNo"],["Permit no.","permitNo"],["Skipper","skipper"],["Skipper ID no.","skipperId"],["Skipper contact no.","contact"],["Email","email"],["Discharge port","port"],
+    var f = [["Vessel name","vessel"],["Vessel reg no. (DFFE form)","registrationNo"],["Rights holder","rightsHolder"],["Right application no.","rightNo"],["Permit no.","permitNo"],["Email","email"],["Discharge port","port"],
       ["Owner/operator (crew list)","owner"],["Official/licence no. (crew list)","licenceNo"],["Port (crew list)","crewListPort"],
       ["Fishery Control Officer name","fcoName"],["FCO cell number (WhatsApp/SMS)","fcoPhone"],["FCO email","fcoEmail"],["VMS provider / contact","vmsProvider"],["Fishing area (FCO notice)","fishingArea"]];
     var sh = openSheet('<h2>Vessel &amp; form details</h2>'+f.map(function(x){ return field(x[0], "set_"+x[1], s[x[1]]); }).join("")+
@@ -3056,15 +3164,45 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
           '<div class="helptext" style="margin:0;">'+esc([k.idNumber||"no ID", k.role, k.contact].filter(function(x){ return x; }).join(" · "))+'</div></div>'+
           '<span style="font-size:22px;color:var(--muted,#888);">›</span></div>';
       }).join("") : '<p class="sheet-text">Nobody yet.</p>')+
+      '<div class="sectionlabel" style="margin-top:14px;">Skippers</div>'+
+      (state.knownSkippers.length ? state.knownSkippers.map(function(k){
+        return '<div data-skid="'+esc(k.id)+'" style="display:flex;justify-content:space-between;align-items:center;gap:10px;min-height:56px;padding:8px 4px;border-bottom:1px solid var(--line);cursor:pointer;">'+
+          '<div><b>'+esc(k.name)+'</b><div class="helptext" style="margin:0;">'+esc([k.idNumber||"no ID", k.contact].filter(function(x){ return x; }).join(" · "))+'</div></div><span style="font-size:22px;color:var(--muted,#888);">›</span></div>';
+      }).join("") : '<p class="sheet-text">None yet — add one when you start a trip.</p>')+
       '<div class="sheet-foot"><button class="btn btn-accent" data-a="ok">Close</button></div>';
     var sh = openSheet(html);
     sh.sheet.querySelector('[data-a="ok"]').onclick = sh.close;
+    sh.sheet.querySelectorAll("[data-skid]").forEach(function(r){ r.onclick = function(){
+      var k = state.knownSkippers.find(function(x){ return x.id===r.getAttribute("data-skid"); });
+      if(k){ sh.close(); openSkipperEdit(k); }
+    }; });
     var bd = sh.sheet.querySelector("#btnKnownDups");
     if(bd) bd.onclick = function(){ sh.close(); openDuplicatesSheet(openKnownCrew); };
     sh.sheet.querySelectorAll("[data-kid]").forEach(function(r){ r.onclick = function(){
       var k = state.knownCrew.find(function(x){ return x.id===r.getAttribute("data-kid"); });
       if(k){ sh.close(); openKnownEdit(k); }
     }; });
+  }
+  // A saved skipper. Trips already started keep the details they were started with.
+  function openSkipperEdit(k){
+    var sh = openSheet('<h2>Edit skipper</h2>'+field("Name", "skName", k.name)+
+      '<div class="grid2">'+field("ID number", "skId", k.idNumber)+field("Contact", "skTel", k.contact, "tel")+'</div>'+
+      '<div class="sheet-foot"><button class="btn btn-danger" data-a="forget">Forget</button><button class="btn btn-outline" data-a="cancel">Cancel</button><button class="btn btn-accent" data-a="save">Save</button></div>');
+    function back(){ sh.close(); openKnownCrew(); }
+    sh.sheet.querySelector('[data-a="cancel"]').onclick = back;
+    sh.sheet.querySelector('[data-a="forget"]').onclick = function(){
+      showConfirm("Forget skipper "+k.name+"? Trips they skippered keep their name.", "Forget", "btn-danger", function(){
+        state.knownSkippers = state.knownSkippers.filter(function(x){ return x!==k; }); saveState(); back();
+      });
+    };
+    sh.sheet.querySelector('[data-a="save"]').onclick = function(){
+      var name = val(sh.sheet,"skName"); if(!name){ showToast("Enter a name", true); return; }
+      var old = k.name;
+      k.name = name; k.idNumber = val(sh.sheet,"skId"); k.contact = val(sh.sheet,"skTel");
+      // Open trips with this skipper pick up the corrected details.
+      state.trips.forEach(function(t){ if(!t.ended && t.skipper && normName(t.skipper.name)===normName(old)) t.skipper = { name:k.name, idNumber:k.idNumber, contact:k.contact }; });
+      if(saveState()){ showToast("Skipper saved"); back(); }
+    };
   }
   // Edit one known-crew record. Changes also reach the same person on trips that are still open.
   function openKnownEdit(k){

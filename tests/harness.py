@@ -57,7 +57,7 @@ class App:
         return json.loads(self.page.evaluate("k => localStorage.getItem(k)", KEY) or "null")
 
     DRAWER_IDS = ("#btnTripHome", "#btnDeparture", "#btnCrew", "#btnContractsNav", "#btnBaitNav", "#btnTanks", "#btnWeights",
-                  "#btnReports", "#btnTripEdit", "#btnEnd", "#btnLandingNav", "#btnAllTrips", "#btnDefects", "#navKnownCrew",
+                  "#btnReports", "#btnTripEdit", "#btnDeleteTrip", "#btnEnd", "#btnLandingNav", "#btnAllTrips", "#btnDefects", "#navKnownCrew",
                   "#navSettings", "#navBackup")
 
     def tap(self, sel):
