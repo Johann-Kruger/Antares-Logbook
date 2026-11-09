@@ -70,6 +70,28 @@
   .iconbtn:active{ background:var(--surface-2); }
 
   .screen{ flex:1; padding:14px 16px 130px; }
+  .topbar{ padding-left:6px; }
+
+  /* ---------- Side menu ---------- */
+  .drawer-wrap{ position:fixed; inset:0; z-index:60; background:rgba(0,0,0,0); pointer-events:none; transition:background .2s; }
+  .drawer-wrap.open{ background:rgba(0,0,0,.55); pointer-events:auto; }
+  .drawer{ position:absolute; top:0; bottom:0; left:0; width:min(84vw, 330px); background:var(--surface); border-right:1px solid var(--line);
+    transform:translateX(-102%); transition:transform .2s ease; overflow-y:auto; padding:calc(14px + env(safe-area-inset-top,0px)) 10px calc(20px + env(safe-area-inset-bottom,0px)); }
+  .drawer-wrap.open .drawer{ transform:none; }
+  .drawer .dhead{ padding:6px 10px 14px; border-bottom:1px solid var(--line); margin-bottom:6px; }
+  .drawer .dhead .v{ font-weight:800; font-size:18px; letter-spacing:.4px; }
+  .drawer .dhead .t{ font-size:13px; color:var(--text-dim); margin-top:2px; }
+  .drawer .dsec{ font-size:12px; font-weight:800; letter-spacing:.8px; color:var(--text-dim); text-transform:uppercase; padding:14px 10px 6px; }
+  .drawer .ditem{ display:flex; align-items:center; gap:14px; width:100%; min-height:52px; padding:10px; border:none; background:none; color:var(--text);
+    font-size:16px; font-weight:600; border-radius:12px; cursor:pointer; text-align:left; }
+  .drawer .ditem:active, .drawer .ditem.on{ background:var(--surface-2); }
+  .drawer .ditem.on{ color:var(--accent); }
+  .drawer .ditem .ic{ width:26px; text-align:center; font-size:19px; flex:none; }
+  .drawer .ditem .lb{ flex:1; }
+  .drawer .ditem .bd{ font-size:13px; font-weight:800; color:var(--text-dim); background:var(--surface-3); border-radius:10px; padding:2px 8px; }
+  .drawer .ditem .bd.warn{ background:var(--yellow); color:var(--yellow-ink); }
+  .drawer .ditem.danger{ color:var(--danger); }
+  #btnBack{ background:none; padding:6px 2px; min-height:44px; color:var(--text-dim); font-weight:700; margin-bottom:6px !important; }
   .card{ background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:14px; margin-bottom:12px; }
   .card h2{ margin:0 0 10px; font-size:14px; font-weight:700; color:var(--text-dim); letter-spacing:.3px; }
   .row-between{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
@@ -190,12 +212,12 @@
 <div id="saveFailedBanner" class="save-banner hidden">Couldn't save to the phone. Your last change is NOT stored. Make a backup now (menu → Backup &amp; restore) and free up space on the phone.</div>
 <div class="app">
   <div class="topbar">
-    <div class="mark" id="btnHome">🐟</div>
+    <button class="iconbtn" id="btnDrawer" aria-label="Menu">☰</button>
     <div class="id"><div class="vessel" id="tbTitle">ANTARES</div><div class="sub" id="tbSub">Tuna pole-and-line logbook</div></div>
     <button class="iconbtn" id="btnTheme" aria-label="Sun mode">☀</button>
-    <button class="iconbtn" id="btnMenu" aria-label="Menu">⋮</button>
   </div>
   <div class="screen" id="screen"></div>
 </div>
 <div class="fab-wrap hidden" id="fab"></div>
+<div class="drawer-wrap" id="drawerWrap" aria-hidden="true"><nav class="drawer" id="drawer"></nav></div>
 <div class="toast" id="toast"></div>

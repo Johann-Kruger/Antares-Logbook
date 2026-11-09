@@ -49,7 +49,7 @@ app.tap('.sheet-backdrop:last-child [data-a="new"]')
 check(len([t for t in app.stored()["trips"] if t["id"] == "t1"][0]["crew"]) == 4, "added as a different person")
 
 # 4. Clean-up tool: known crew groups
-app.tap("#btnMenu"); app.tap('[data-a="dups"]')
+app.tap("#navDups")
 txt = p.locator(".sheet").last.inner_text()
 check("Jo Dupe" in txt and "JO dupe" in txt, "same name, one without ID, grouped")
 check("Pat Twin" not in txt, "same name but two different IDs are not duplicates")

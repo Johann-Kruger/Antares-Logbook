@@ -56,7 +56,17 @@ class App:
     def stored(self):
         return json.loads(self.page.evaluate("k => localStorage.getItem(k)", KEY) or "null")
 
+    DRAWER_IDS = ("#btnTripHome", "#btnDeparture", "#btnCrew", "#btnContractsNav", "#btnBaitNav", "#btnTanks", "#btnWeights",
+                  "#btnReports", "#btnTripEdit", "#btnEnd", "#btnLandingNav", "#btnAllTrips", "#btnDefects", "#navKnownCrew",
+                  "#navDups", "#navSettings", "#navBackup")
+
     def tap(self, sel):
+        if sel in self.DRAWER_IDS:
+            # These live in the side menu: open it first, like the skipper would.
+            if not self.page.evaluate("() => document.getElementById('drawerWrap').classList.contains('open')"):
+                self.page.locator("#btnDrawer").click(); self.page.wait_for_timeout(250)
+            self.page.locator(sel).first.click(); self.page.wait_for_timeout(250)
+            return
         el = self.page.locator(sel).first
         # Centre it first so the fixed bottom button bar can't cover it.
         el.evaluate("e => e.scrollIntoView({block: 'center'})")
