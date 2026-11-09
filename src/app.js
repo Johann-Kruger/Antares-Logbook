@@ -875,7 +875,7 @@
     row("ETA", l.eta ? fmtDate(l.eta)+(l.etaTime?" "+l.etaTime:"")+", "+(l.port||"") : "");
     row("FCO notified", l.fcoAt ? fmtTime(l.fcoAt)+" by "+l.fcoHow+(l.fcoRef?" — "+l.fcoRef:"") : "No");
     row("Fishery Control Officer", [s.fcoName, s.fcoPhone, s.fcoEmail].filter(Boolean).join(", "));
-    y += 14; doc.text("Skipper:", L, y); sigOnPdf(doc, trip, L+18, y+1, 40); doc.line(L+18, y+1, L+70, y+1);
+    skipperSignature(doc, trip, L);
     saveFileOut(fileName(trip, "departure_landing", "pdf"), doc.output("blob"));
   }
 
@@ -966,7 +966,7 @@
     y += 7;
     var acc = 0;
     d.list.forEach(function(st){
-      if(y > 270){ doc.addPage(); y = 16; }
+      if(y > 297 - SIG_SPACE - 14){ doc.addPage(); y = 16; }
       acc += int(st.alb);
       var vals = [st.time, fmtPos(st.lat, st.lon), st.tank].concat(d.sps.map(function(sp){ return countOf(st, sp.code) || ""; }), [acc, st.sst, ((st.windDir||"")+" "+(st.windKn||"")).trim(), st.schoolDepth ? st.schoolDepth+" m" : ""]);
       x = L; cols.forEach(function(c, j){ cellText(doc, vals[j], x, y, c[1], 6.5, { size:8.5 }); x += c[1]; }); y += 6.5;
@@ -975,8 +975,7 @@
       var v = j===0 ? "Total" : (j>=3 && j<3+d.sps.length) ? sumSp(d.list, d.sps[j-3].code) : "";
       cellText(doc, v, x, y, c[1], 7, { bold:true, size:8.5 }); x += c[1];
     });
-    y += 16;
-    doc.setFontSize(10); doc.text("Skipper:", L, y); sigOnPdf(doc, trip, L+18, y+1, 40); doc.line(L+18, y+1, L+70, y+1);
+    skipperSignature(doc, trip, L, fmtDate(date));
     saveFileOut(fileName(trip, "day_report_"+date.replace(/-/g,""), "pdf"), doc.output("blob"));
   }
   function lockedGuard(trip){
@@ -1389,7 +1388,7 @@
     if(!h.fish.length) html += '<p class="helptext">No fish logged on this day.</p>';
     html += '<div class="sectionlabel" style="font-size:15px;color:var(--text);">Operation and sanitation</div>'+sanRows(SAN_OPS)+
       '<div class="sectionlabel" style="font-size:15px;color:var(--text);">Storage</div>'+sanRows(SAN_STORE)+
-      '<div class="grid2" style="margin-top:10px;">'+field("Daily temp °C", "hDailyTemp", h.dailyTemp, "text", 'inputmode="decimal"')+field("Inspected by", "hBy", h.inspectedBy)+'</div>'+
+      '<div style="margin-top:10px;">'+field("Daily temp inspected by", "hBy", h.inspectedBy || state.settings.skipper)+'</div>'+
       '<p class="helptext">Offloading temperatures are added on discharge day (Reports → HACCP).</p>'+
       '<div class="sheet-foot"><button class="btn btn-outline" data-a="cancel">Cancel</button><button class="btn btn-accent" data-a="save">Save check</button></div>';
     var sh = openSheet(html, { guard:function(){ return dirty; } });
@@ -1412,7 +1411,7 @@
           else { var el = root.querySelector("#f"+i+"_"+x.k); if(el) f[x.k] = el.value.trim(); }
         });
       });
-      h.dailyTemp = val(root,"hDailyTemp"); h.inspectedBy = val(root,"hBy"); h.doneAt = new Date().toISOString();
+      h.inspectedBy = val(root,"hBy") || state.settings.skipper; h.doneAt = new Date().toISOString();
       trip.haccp[date] = normaliseHaccp(h);
       saveState(); sh.close(); showToast("End-of-day check saved");
       if(after) after(); else render();
@@ -1437,6 +1436,22 @@
   function sigOnPdf(doc, trip, x, y, w){
     if(trip.skipperSig){ try{ doc.addImage(trip.skipperSig, "PNG", x, y-w*0.33, w, w*0.33); }catch(e){} }
   }
+  // Signature block at the bottom of the page: label, signature on a line,
+  // the signer's name in bold underneath, and an optional date.
+  var SIG_SPACE = 30; // mm kept clear at the foot of a page for the block
+  function signatureAt(doc, x, label, sigImg, name, date){
+    var H = doc.internal.pageSize.getHeight();
+    var lineY = H - 18, w = 58;
+    doc.setFont("helvetica","normal"); doc.setFontSize(9); doc.setTextColor(80);
+    doc.text(label, x, lineY - 17);
+    doc.setTextColor(0);
+    if(sigImg){ try{ doc.addImage(sigImg, "PNG", x, lineY - 15, 45, 15); }catch(e){} }
+    doc.setDrawColor(60); doc.line(x, lineY, x + w, lineY);
+    doc.setFont("helvetica","bold"); doc.setFontSize(10.5); doc.text(String(name||""), x, lineY + 5);
+    if(date){ doc.setFont("helvetica","normal"); doc.setFontSize(9); doc.text("Date: "+date, x, lineY + 10); }
+    doc.setFont("helvetica","normal"); doc.setFontSize(10);
+  }
+  function skipperSignature(doc, trip, x, date, label){ signatureAt(doc, x, label || "Skipper signature", trip.skipperSig, state.settings.skipper, date); }
   function pdfHeader(doc, title, trip, pageW){
     doc.setFont("helvetica","bold"); doc.setFontSize(14);
     var tl = title.indexOf("\n")>=0 ? title.split("\n") : doc.splitTextToSize(title, pageW-30);
@@ -1489,14 +1504,13 @@
       block(SAN_OPS);
       cellText(doc, "STORAGE", x0, y, qW, rh, { bold:true, left:true, size:9 }); for(i=0;i<14;i++) cellText(doc, "", x0+qW+i*cW, y, cW, rh); y += rh;
       block(SAN_STORE);
+      // "Daily temp." is only a heading; the temperatures themselves are recorded elsewhere.
       cellText(doc, "DAILY TEMP.", x0, y, qW, rh, { bold:true, left:true, size:9 });
-      for(i=0;i<7;i++) cellText(doc, ds[i] ? trip.haccp[ds[i]].dailyTemp : "", x0+qW+i*2*cW, y, 2*cW, rh);
+      for(i=0;i<7;i++) cellText(doc, "", x0+qW+i*2*cW, y, 2*cW, rh, { fill:[235,235,235] });
       y += rh;
       cellText(doc, "Inspected by:", x0, y, qW, rh+4, { left:true, bold:true });
-      for(i=0;i<7;i++) cellText(doc, ds[i] ? trip.haccp[ds[i]].inspectedBy : "", x0+qW+i*2*cW, y, 2*cW, rh+4, { size:6.5 });
-      y += rh+14;
-      doc.setFont("helvetica","normal"); doc.setFontSize(10);
-      doc.text("Skipper: "+state.settings.skipper, x0, y); sigOnPdf(doc, trip, 90, y+2, 45); doc.line(90, y+2, 140, y+2);
+      for(i=0;i<7;i++) cellText(doc, ds[i] ? (trip.haccp[ds[i]].inspectedBy || state.settings.skipper) : "", x0+qW+i*2*cW, y, 2*cW, rh+4, { size:6.5 });
+      skipperSignature(doc, trip, x0);
     }
     saveFileOut(fileName(trip, "haccp_sanitation", "pdf"), doc.output("blob"));
   }
@@ -1506,7 +1520,7 @@
     var rows = [];
     Object.keys(trip.haccp).sort().forEach(function(d){ trip.haccp[d].fish.forEach(function(f){ rows.push(f); }); });
     if(!rows.length){ showToast("No end-of-day checks with fish on this trip", true); return; }
-    var per = 10;
+    var per = 6;
     for(var page=0; page*per<rows.length; page++){
       if(page) doc.addPage();
       var rs = rows.slice(page*per, page*per+per);
@@ -1545,9 +1559,7 @@
         tail.forEach(function(c){ cellText(doc, f[c[0]]==="Y" ? "Yes" : f[c[0]]==="N" ? "No" : "", x, y, tW, rh, { size:7.5 }); x += tW; });
         y += rh;
       });
-      y += 12;
-      doc.setFont("helvetica","normal"); doc.setFontSize(10);
-      doc.text("Skipper: "+state.settings.skipper, x0, y); sigOnPdf(doc, trip, 70, y+2, 45); doc.line(70, y+2, 120, y+2);
+      skipperSignature(doc, trip, x0);
     }
     saveFileOut(fileName(trip, "haccp_fresh_fish", "pdf"), doc.output("blob"));
   }
@@ -1853,7 +1865,7 @@
     var crew = crewOnly(trip);
     var n = Math.max(12, crew.length);
     for(var i=0;i<n;i++){
-      if(y > 185){ doc.addPage(); y = 20; }
+      if(y > 210 - SIG_SPACE - rh){ doc.addPage(); y = 20; }
       var c = crew[i];
       var idText = c ? (c.idNumber || "— (no ID)") : "";
       var vals = c ? [String(i+1), c.name, c.surname, c.nationality, idText, c.role||"Crew", c.contact, c.kinName, c.kinContact] : [String(i+1),"","","","","","","",""];
@@ -1861,10 +1873,7 @@
       cols.forEach(function(col, j){ doc.setDrawColor(150); doc.rect(x, y, col[1], rh); doc.setFont("helvetica","normal"); doc.setFontSize(9); doc.text(doc.splitTextToSize(String(vals[j]||""), col[1]-3)[0] || "", x+2, y+6); x += col[1]; });
       y += rh;
     }
-    y = Math.min(y + 16, 200);
-    doc.setFontSize(10); doc.setFont("helvetica","normal");
-    doc.text("Skipper signature:", x0, y); sigOnPdf(doc, trip, x0+34, y+1, 45); doc.line(x0+34, y+1, x0+100, y+1);
-    doc.text("Date: "+(trip.crewConfirmedAt ? fmtDate(todayISO(new Date(trip.crewConfirmedAt))) : "______________"), x0+115, y);
+    skipperSignature(doc, trip, x0, trip.crewConfirmedAt ? fmtDate(todayISO(new Date(trip.crewConfirmedAt))) : "");
     saveFileOut(fileName(trip, "crew_list", "pdf"), doc.output("blob"));
   }
 
@@ -2130,17 +2139,10 @@
       fieldLine([["Trip No", trip.tripNumber, 18],["Date Commence", fmtDate(trip.sailDate), 24],["Date Finish", CONTRACT_FINISH, 44]]);
       y += 2;
       secs.slice(1).forEach(function(x){ heading(x[0]); para(x[1]); });
-      y += 10;
       var k = trip.contracts[c.id];
-      doc.text("Signed by Crew:", L, y);
-      if(k){ try{ doc.addImage(k.sig, "PNG", L+30, y-13, 45, 15); }catch(e){} }
-      doc.line(L+30, y+1, L+95, y+1);
-      doc.text("Date: "+(k ? fmtDate(todayISO(new Date(k.signedAt))) : ""), L+105, y); doc.line(L+115, y+1, L+150, y+1);
-      y += 18;
-      doc.text("Signed by Skipper/Ntoza Fishing Rep:", L, y);
-      sigOnPdf(doc, trip, L+64, y+1, 40); doc.line(L+64, y+1, L+110, y+1);
-      doc.text("Date: "+(k ? fmtDate(todayISO(new Date(k.signedAt))) : ""), L+115, y); doc.line(L+125, y+1, L+160, y+1);
-      doc.setFontSize(9); doc.text(state.settings.skipper, L+64, y+5);
+      var signedOn = k ? fmtDate(todayISO(new Date(k.signedAt))) : "";
+      signatureAt(doc, L, "Signed by Crew", k ? k.sig : "", c.name+" "+c.surname, signedOn);
+      skipperSignature(doc, trip, L+95, signedOn, "Signed by Skipper / Ntoza Fishing Rep");
     });
     var who = crew.length===1 ? "_"+(crew[0].surname||crew[0].name).replace(/[^A-Za-z0-9]/g,"") : "";
     saveFileOut(fileName(trip, "crew_contract"+(crew.length===1?"":"s")+who, "pdf"), doc.output("blob"));
