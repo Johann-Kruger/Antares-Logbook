@@ -2992,8 +2992,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     html += '<div class="dsec">Vessel</div>'+
       item("btnAllTrips", "🗂", "All trips", state.trips.length, cur==="trips")+
       item("btnDefects", "🔧", "Defects & maintenance", openDefects().length ? openDefects().length+" !" : "", cur==="defects")+
-      item("navKnownCrew", "👤", "Known crew", state.knownCrew.length, false)+
-      item("navDups", "🧹", "Remove duplicate crew", "", false)+
+      item("navKnownCrew", "👤", "Known crew", state.knownCrew.length + (Object.keys(knownDupIds()).length ? " ⚠" : ""), false)+
       '<div class="dsec">Settings</div>'+
       item("navSettings", "⚙", "Vessel & form details", "", false)+
       item("navBackup", "💾", "Backup & restore", "", false);
@@ -3014,7 +3013,6 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     var all = document.getElementById("btnAllTrips"); if(all) all.onclick = function(){ closeDrawer(); go("trips", null); };
     on("btnDefects", function(){ go("defects"); });
     on("navKnownCrew", openKnownCrew);
-    on("navDups", function(){ openDuplicatesSheet(); });
     on("navSettings", openSettings);
     on("navBackup", openBackupSheet);
   }
@@ -3042,16 +3040,87 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
       saveState(); sh.close(); render(); showToast("Saved");
     };
   }
+  function knownDupIds(){
+    var ids = {};
+    findDuplicateGroups().forEach(function(g){ if(!g.trip) g.items.forEach(function(c){ ids[c.id] = 1; }); });
+    return ids;
+  }
   function openKnownCrew(){
-    var html = '<h2>Known crew</h2><p class="helptext">People added to a trip are remembered here so they can be picked next time.</p>'+
-      (state.knownCrew.length ? state.knownCrew.map(function(k,i){ return '<div class="row-between" style="padding:8px 0;border-bottom:1px solid var(--line);"><div><b>'+esc(k.name+" "+k.surname)+'</b><div class="helptext" style="margin:0;">'+esc(k.idNumber||"")+'</div></div><button class="btn btn-danger btn-sm" data-k="'+i+'">Forget</button></div>'; }).join("") : '<p class="sheet-text">Nobody yet.</p>')+
+    var groups = findDuplicateGroups(), dupIds = knownDupIds();
+    var list = state.knownCrew.slice().sort(function(a,b){ return (a.surname+" "+a.name).toLowerCase() < (b.surname+" "+b.name).toLowerCase() ? -1 : 1; });
+    var html = '<h2>Known crew ('+state.knownCrew.length+')</h2><p class="helptext">Tap a person to edit their details. Crew added to a trip are remembered here.</p>'+
+      (groups.length ? '<div class="locked-note" style="margin-bottom:8px;"><span>⚠ '+groups.length+' possible duplicate'+(groups.length>1?"s":"")+'</span><button class="btn btn-sm btn-accent" id="btnKnownDups">Review &amp; remove</button></div>' : '')+
+      (list.length ? list.map(function(k){
+        return '<div class="kc-row" data-kid="'+esc(k.id)+'" style="display:flex;justify-content:space-between;align-items:center;gap:10px;min-height:56px;padding:8px 4px;border-bottom:1px solid var(--line);cursor:pointer;">'+
+          '<div><b>'+esc(k.name+" "+k.surname)+'</b>'+(dupIds[k.id]?' <span class="badge" style="background:var(--warn,#c80);color:#fff;border-radius:6px;padding:1px 6px;font-size:12px;">DUPLICATE?</span>':'')+
+          '<div class="helptext" style="margin:0;">'+esc([k.idNumber||"no ID", k.role, k.contact].filter(function(x){ return x; }).join(" · "))+'</div></div>'+
+          '<span style="font-size:22px;color:var(--muted,#888);">›</span></div>';
+      }).join("") : '<p class="sheet-text">Nobody yet.</p>')+
       '<div class="sheet-foot"><button class="btn btn-accent" data-a="ok">Close</button></div>';
     var sh = openSheet(html);
     sh.sheet.querySelector('[data-a="ok"]').onclick = sh.close;
-    sh.sheet.querySelectorAll("[data-k]").forEach(function(b){ b.onclick = function(){
-      var k = state.knownCrew[int(b.getAttribute("data-k"))];
-      showConfirm("Forget "+k.name+" "+k.surname+"? They stay on any trip they're already on.", "Forget", "btn-danger", function(){ state.knownCrew.splice(int(b.getAttribute("data-k")),1); saveState(); sh.close(); openKnownCrew(); });
+    var bd = sh.sheet.querySelector("#btnKnownDups");
+    if(bd) bd.onclick = function(){ sh.close(); openDuplicatesSheet(openKnownCrew); };
+    sh.sheet.querySelectorAll("[data-kid]").forEach(function(r){ r.onclick = function(){
+      var k = state.knownCrew.find(function(x){ return x.id===r.getAttribute("data-kid"); });
+      if(k){ sh.close(); openKnownEdit(k); }
     }; });
+  }
+  // Edit one known-crew record. Changes also reach the same person on trips that are still open.
+  function openKnownEdit(k){
+    var html = '<h2>Edit crew member</h2>'+
+      '<div class="grid2">'+field("Name", "kName", k.name)+field("Surname", "kSurname", k.surname)+'</div>'+
+      '<div class="grid2">'+field("ID / passport number", "kId", k.idNumber)+field("Nationality", "kNat", k.nationality, "text", 'autocapitalize="characters"')+'</div>'+
+      field("Contact number", "kTel", k.contact, "tel")+
+      '<div class="grid2">'+field("Next of kin name", "kKinName", k.kinName)+field("Next of kin number", "kKinTel", k.kinContact, "tel")+'</div>'+
+      '<div class="sectionlabel">Commission for the contract (not on the crew list)</div>'+
+      '<div class="grid2">'+field("Longfin R / ton", "kAlbRate", k.albRate, "text", 'inputmode="decimal"')+field("Yellowfin R / ton", "kYftRate", k.yftRate, "text", 'inputmode="decimal"')+'</div>'+
+      '<div class="sectionlabel">Position</div>'+chips("krole", POSITIONS.concat(k.role && POSITIONS.indexOf(k.role)<0 ? [k.role] : []), k.role||"Crew")+
+      '<div class="sheet-foot"><button class="btn btn-danger" data-a="forget">Forget</button><button class="btn btn-outline" data-a="cancel">Cancel</button><button class="btn btn-accent" data-a="save">Save</button></div>';
+    var sh = openSheet(html);
+    wireChips(sh.sheet);
+    function back(){ sh.close(); openKnownCrew(); }
+    sh.sheet.querySelector('[data-a="cancel"]').onclick = back;
+    sh.sheet.querySelector('[data-a="forget"]').onclick = function(){
+      showConfirm("Forget "+k.name+" "+k.surname+"? They stay on any trip they're already on.", "Forget", "btn-danger", function(){
+        state.knownCrew = state.knownCrew.filter(function(x){ return x!==k; });
+        if(saveState()) showToast(k.name+" "+k.surname+" forgotten");
+        back();
+      });
+    };
+    sh.sheet.querySelector('[data-a="save"]').onclick = function(){
+      var rec = { name:val(sh.sheet,"kName"), surname:val(sh.sheet,"kSurname"), idNumber:val(sh.sheet,"kId"), nationality:val(sh.sheet,"kNat").toUpperCase(),
+        contact:val(sh.sheet,"kTel"), kinName:val(sh.sheet,"kKinName"), kinContact:val(sh.sheet,"kKinTel"), albRate:val(sh.sheet,"kAlbRate"), yftRate:val(sh.sheet,"kYftRate"),
+        role:chipValue(sh.sheet,"krole") || "Crew" };
+      if(!rec.name){ showToast("Enter a name", true); return; }
+      function apply(){
+        CREW_TEXT.forEach(function(f){ k[f] = rec[f] || ""; });
+        var touched = [];
+        state.trips.filter(function(t){ return !t.ended; }).forEach(function(t){
+          var hit = false;
+          t.crew.forEach(function(c){ if(c.knownId===k.id){ CREW_TEXT.forEach(function(f){ c[f] = k[f]; }); hit = true; } });
+          if(hit) touched.push(tripLabel(t));
+        });
+        return touched;
+      }
+      function finish(touched){
+        if(saveState()){ showToast(rec.name+" "+rec.surname+" saved"+(touched.length?" — also updated on "+touched.join(", "):"")); back(); }
+      }
+      var other = state.knownCrew.find(function(x){ return x!==k && crewMatch(x, rec); });
+      if(!other){ finish(apply()); return; }
+      var why = crewMatch(other, rec);
+      var d = openSheet('<h2>Already in known crew?</h2><p class="sheet-text">These details look like <b>'+esc(other.name+" "+other.surname)+'</b>'+(other.idNumber?' ('+esc(other.idNumber)+')':'')+' — '+esc(why)+'.</p>'+
+        '<div class="sheet-actions"><button class="btn btn-accent" data-a="merge">Same person — merge into one</button><button class="btn btn-ghost" data-a="new">Different person — save</button><button class="btn btn-outline" data-a="cancel">Cancel</button></div>');
+      d.sheet.querySelector('[data-a="cancel"]').onclick = d.close;
+      d.sheet.querySelector('[data-a="new"]').onclick = function(){ markNotDuplicate(other, rec); d.close(); finish(apply()); };
+      d.sheet.querySelector('[data-a="merge"]').onclick = function(){
+        d.close();
+        fillFrom(rec, other, false);
+        state.knownCrew = state.knownCrew.filter(function(x){ return x!==other; });
+        state.trips.forEach(function(t){ t.crew.forEach(function(c){ if(c.knownId===other.id) c.knownId = k.id; }); });
+        finish(apply());
+      };
+    };
   }
   function exportBackup(){
     var json = JSON.stringify({ app:"antares-logbook", savedAt:new Date().toISOString(), data:state }, null, 1);
