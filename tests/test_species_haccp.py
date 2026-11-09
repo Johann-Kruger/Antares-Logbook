@@ -13,6 +13,7 @@ check(trip["skipperSig"].startswith("data:image/png;base64,"), "signature stored
 check(len(trip["crew"]) == 1 and not trip["crewConfirmedAt"], "crew copied, not yet confirmed")
 app.tap('.sheet [data-a="cancel"]')
 check("not confirmed" in p.locator("#screen").inner_text() and "NEXT: Departure check" in p.locator("#btnNext").inner_text(), "trip screen guides to the departure check first")
+check("Pre-departure checks" in p.locator("#screen").inner_text() and "Defects review" in p.locator("#screen").inner_text(), "pre-departure checks card, defects review in it")
 
 # First stop: skip weather, log LF + bigeye + a new species
 app.tap("#btnLogStop"); app.tap('.sheet [data-a="skip"]')
@@ -29,6 +30,7 @@ check(s["customSpecies"] == [{"code": "DOL", "name": "Dorado"}], "new species sa
 st = [t for t in s["trips"] if t["tripNumber"] == "20"][0]["stops"][0]
 check(st["alb"] == "30" and st["other"] == {"BET": "2", "DOL": "1"} and st["tank"] == "4", "species counts and tank: %r" % st)
 
+check("Pre-departure checks" not in p.locator("#screen").inner_text() and p.locator("#btnNext").count() == 0, "card gone once fishing has started")
 # Next stop: no weather question, tank 4 still selected
 app.tap("#btnLogStop")
 check(p.get_by_text("Start of the day").count() == 0, "weather asked only once a day")

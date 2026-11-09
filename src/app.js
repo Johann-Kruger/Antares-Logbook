@@ -523,9 +523,13 @@
       '<div><div class="n" style="color:var(--text)">'+tot.stops+'</div><div class="l">stops</div></div>'+
       '</div></div>';
     var steps = tripSteps(trip);
+    // Pre-departure checks show until they're all done or fishing has started (first stop);
+    // after that they're only in the side menu.
+    var preDone = !trip.ended && (steps.every(function(x){ return x.done; }) || trip.stops.length>0);
+    if(preDone) steps = [];
     if(steps.some(function(x){ return !x.done; })){
       var doneSteps = steps.filter(function(x){ return x.done; }), todo = steps.filter(function(x){ return !x.done; });
-      html += '<div class="card"><h2>'+(trip.ended ? "After offload" : "Before you start fishing")+' · '+doneSteps.length+' of '+steps.length+' done</h2>'+
+      html += '<div class="card"><h2>'+(trip.ended ? "After offload" : "Pre-departure checks")+' · '+doneSteps.length+' of '+steps.length+' done</h2>'+
         (doneSteps.length ? '<div class="helptext" style="margin:0 0 6px;color:var(--kelp);">✓ '+doneSteps.map(function(x){ return esc(x.short); }).join(" · ")+'</div>' : '')+
         todo.map(function(x){
           return '<div class="row-between" style="padding:7px 0;border-top:1px solid var(--line);"><div style="font-size:15px;font-weight:700;">'+esc(x.short)+(x.sub?'<div class="helptext" style="margin:2px 0 0;font-weight:400;">'+esc(x.sub)+'</div>':'')+'</div>'+
