@@ -524,27 +524,21 @@
       '</div></div>';
     var steps = tripSteps(trip);
     if(steps.some(function(x){ return !x.done; })){
-      html += '<div class="card"><h2>'+(trip.ended ? "After offload" : "Before you start fishing")+'</h2>'+steps.map(function(x){
-        return '<div class="row-between" style="padding:7px 0;border-bottom:1px solid var(--line);"><div style="font-size:15px;'+(x.done?'color:var(--text-dim);':'font-weight:700;')+'">'+(x.done?'✓ ':'○ ')+esc(x.label)+(x.sub?'<div class="helptext" style="margin:2px 0 0;">'+esc(x.sub)+'</div>':'')+'</div>'+
-          '<button class="btn '+(x.done?'btn-ghost':'btn-accent')+' btn-sm" data-step-go="'+x.key+'">'+(x.done?'Open':'Go')+'</button></div>';
-      }).join("")+'</div>';
+      var doneSteps = steps.filter(function(x){ return x.done; }), todo = steps.filter(function(x){ return !x.done; });
+      html += '<div class="card"><h2>'+(trip.ended ? "After offload" : "Before you start fishing")+' · '+doneSteps.length+' of '+steps.length+' done</h2>'+
+        (doneSteps.length ? '<div class="helptext" style="margin:0 0 6px;color:var(--kelp);">✓ '+doneSteps.map(function(x){ return esc(x.short); }).join(" · ")+'</div>' : '')+
+        todo.map(function(x){
+          return '<div class="row-between" style="padding:7px 0;border-top:1px solid var(--line);"><div style="font-size:15px;font-weight:700;">'+esc(x.short)+(x.sub?'<div class="helptext" style="margin:2px 0 0;font-weight:400;">'+esc(x.sub)+'</div>':'')+'</div>'+
+            '<button class="btn btn-accent btn-sm" data-step-go="'+x.key+'">Go</button></div>';
+        }).join("")+'</div>';
     }
     if(!trip.ended && !trip.skipperSig) html += '<div class="locked-note"><span>No skipper signature for this trip.</span><button class="btn btn-sm" id="btnSign">Sign</button></div>';
     if(baitLoaded(trip)){
       var bb = baitBalance(trip);
-      html += '<div class="card"><div class="row-between"><div><div style="font-weight:800;font-size:17px;">🐟 Bait on board: '+bb+' boxes</div><div class="helptext" style="margin:2px 0 0;">'+
+      html += '<div class="card" style="padding:10px 14px;"><div class="row-between"><div><div style="font-weight:800;font-size:16px;">🐟 Bait on board: '+bb+' boxes</div><div class="helptext" style="margin:2px 0 0;">'+
         (trip.bait.boxKg ? kg(bb*num(trip.bait.boxKg))+' kg · ' : '')+'loaded '+baitSum(trip,"load")+(baitSum(trip,"received")?' · received '+baitSum(trip,"received"):'')+' · used '+baitSum(trip,"used")+'</div></div>'+
-        (trip.ended ? '' : '<button class="btn btn-ghost btn-sm" id="btnBaitRecv">+ Received</button>')+'</div></div>';
+        '</div></div>';
     }
-    html += '<div class="actions">'+
-      '<button class="btn btn-ghost" id="btnCrew">👥 Crew ('+trip.crew.length+')</button>'+
-      '<button class="btn btn-ghost" id="btnWeights">⚖ Weights ('+trip.weights.length+')</button>'+
-      '<button class="btn btn-ghost" id="btnTanks">🧊 Tanks</button>'+
-      '<button class="btn btn-ghost" id="btnReports">📄 Reports</button>'+
-      '<button class="btn btn-ghost" id="btnDefects">🔧 Defects ('+openDefects().length+')</button>'+
-      '<button class="btn btn-ghost" id="btnTripEdit">✎ Trip details</button>'+
-      (trip.ended ? '<span></span>' : '<button class="btn btn-ghost" id="btnEnd">⚓ End trip</button>')+
-      '</div>';
     var dates = tripDates(trip).slice().reverse();
     if(!dates.length) html += '<div class="empty"><div class="big">📍</div>No stops yet.<br>Tap <b>Log stop</b> each time you stop on fish.</div>';
     var running = {}; // trip running total after each stop
@@ -558,7 +552,7 @@
         (hasWeather(trip,d)?'<div class="s">🌬 '+esc(weatherText(trip.days[d])||trip.days[d].wxNote)+'</div>':'')+'</div>'+
         '<button class="btn btn-ghost btn-sm" data-day="'+d+'">Day ▾</button></div>'+
         (list.length ? (dayEnded(trip,d)
-          ? '<div class="btnrow" style="margin-bottom:8px;"><button class="btn btn-ghost btn-sm" data-dayrep="'+d+'">📄 Day report</button><button class="btn btn-ghost btn-sm" data-daytext="'+d+'">💬 Day text</button></div>'
+          ? '<div class="helptext" style="margin:-4px 0 8px;color:var(--kelp);" data-dayclosed="'+d+'">✓ Day closed — report under Day ▾</div>'
           : '<button class="btn btn-outline btn-sm" data-endday="'+d+'" style="width:100%;margin-bottom:8px;border-color:var(--yellow);color:var(--yellow);">🌙 End of day — bait, HACCP, report</button>') : '');
       var dayAcc = 0;
       list.forEach(function(s){
@@ -577,13 +571,6 @@
     });
     el.innerHTML = html;
     wireBack(function(){ go("trips", null); });
-    document.getElementById("btnCrew").onclick = function(){ go("crew"); };
-    document.getElementById("btnWeights").onclick = function(){ go("weights"); };
-    document.getElementById("btnReports").onclick = function(){ go("reports"); };
-    document.getElementById("btnTanks").onclick = function(){ openTanksSheet(trip); };
-    document.getElementById("btnDefects").onclick = function(){ go("defects"); };
-    document.getElementById("btnTripEdit").onclick = function(){ if(lockedGuard(trip)) return; openTripSheet(trip); };
-    var be = document.getElementById("btnEnd"); if(be) be.onclick = function(){ openEndTripSheet(trip); };
     var br = document.getElementById("btnReopen"); if(br) br.onclick = function(){
       if(openTrip()){ showToast("End the trip that's at sea first", true); return; }
       showConfirm("Reopen "+tripLabel(trip)+" so it can be changed?", "Reopen", "btn-accent", function(){ trip.ended = false; saveState(); render(); });
@@ -593,7 +580,7 @@
     el.querySelectorAll("[data-dayrep]").forEach(function(b){ b.onclick = function(){ buildDayReportPdf(trip, b.getAttribute("data-dayrep")); }; });
     el.querySelectorAll("[data-daytext]").forEach(function(b){ b.onclick = function(){ shareDayText(trip, b.getAttribute("data-daytext")); }; });
     el.querySelectorAll("[data-step-go]").forEach(function(b){ b.onclick = function(){ runStep(trip, b.getAttribute("data-step-go")); }; });
-    var brc = document.getElementById("btnBaitRecv"); if(brc) brc.onclick = function(){ openBaitReceivedSheet(trip); };
+
     var sg = document.getElementById("btnSign"); if(sg) sg.onclick = function(){ captureSkipperSig(trip); };
     el.querySelectorAll("[data-stop]").forEach(function(r){ r.onclick = function(){ openStopSheet(trip, trip.stops.find(function(s){ return s.id===r.getAttribute("data-stop"); })); }; });
     var fab = document.getElementById("fab");
@@ -1326,6 +1313,7 @@
   function openDayMenu(trip, date){
     var sh = openSheet('<h2>'+esc(fmtDay(date))+'</h2><div class="sheet-actions">'+
       '<button class="btn btn-ghost" data-a="wx">🌬 Weather'+(hasWeather(trip,date)?' — '+esc(weatherText(trip.days[date])||"set"):'')+'</button>'+
+      (dayEnded(trip,date) ? '<button class="btn btn-ghost" data-a="rep">📄 Day report (PDF)</button><button class="btn btn-ghost" data-a="txt">💬 Day report as text</button>' : '')+
       '<button class="btn btn-ghost" data-a="eod">🌙 End of day (bait, HACCP, report)</button>'+
       '<button class="btn btn-ghost" data-a="haccp">🧊 HACCP check only</button>'+
       '<button class="btn btn-ghost" data-a="dffe">📋 DFFE day details (crew, hours, bait, SST)</button>'+
@@ -1334,6 +1322,8 @@
     sh.sheet.querySelector('[data-a="wx"]').onclick = function(){ sh.close(); if(lockedGuard(trip)) return; openWeatherSheet(trip, date); };
     sh.sheet.querySelector('[data-a="haccp"]').onclick = function(){ sh.close(); openHaccpSheet(trip, date); };
     sh.sheet.querySelector('[data-a="eod"]').onclick = function(){ sh.close(); startEndOfDay(trip, date); };
+    var rp = sh.sheet.querySelector('[data-a="rep"]'); if(rp) rp.onclick = function(){ buildDayReportPdf(trip, date); };
+    var tx = sh.sheet.querySelector('[data-a="txt"]'); if(tx) tx.onclick = function(){ sh.close(); shareDayText(trip, date); };
     sh.sheet.querySelector('[data-a="dffe"]').onclick = function(){ sh.close(); openDaySheet(trip, date); };
   }
   // Previous day's answers on any trip, so each day starts from the last one.
@@ -2367,21 +2357,62 @@
   }
 
   // ================= Menu, settings, backup =================
-  function openMenu(){
-    var sh = openSheet('<h2>Menu</h2><div class="menu-list">'+
-      '<button class="btn btn-ghost" data-a="settings">⚙ Vessel &amp; form details</button>'+
-      '<button class="btn btn-ghost" data-a="backup">💾 Backup &amp; restore</button>'+
-      '<button class="btn btn-ghost" data-a="crew">👥 Known crew ('+state.knownCrew.length+')</button>'+
-      '<button class="btn btn-ghost" data-a="dups">🧹 Remove duplicate crew</button>'+
-      '<button class="btn btn-ghost" data-a="defects">🔧 Defects &amp; maintenance ('+openDefects().length+' open)</button>'+
-      '</div><div class="sheet-foot"><button class="btn btn-outline" data-a="close">Close</button></div>');
-    sh.sheet.querySelector('[data-a="close"]').onclick = sh.close;
-    sh.sheet.querySelector('[data-a="settings"]').onclick = function(){ sh.close(); openSettings(); };
-    sh.sheet.querySelector('[data-a="backup"]').onclick = function(){ sh.close(); openBackupSheet(); };
-    sh.sheet.querySelector('[data-a="crew"]').onclick = function(){ sh.close(); openKnownCrew(); };
-    sh.sheet.querySelector('[data-a="dups"]').onclick = function(){ sh.close(); openDuplicatesSheet(); };
-    sh.sheet.querySelector('[data-a="defects"]').onclick = function(){ sh.close(); go("defects"); };
+  // ================= Side menu =================
+  // Every function lives here, grouped by trip and vessel, so the screens stay clean.
+  function drawerTrip(){ return (view.tripId && getTrip(view.tripId)) || openTrip() || null; }
+  function renderDrawer(){
+    var trip = drawerTrip(), s = state.settings;
+    var cur = view.screen;
+    function item(id, ic, label, badge, on, cls){
+      return '<button class="ditem'+(on?" on":"")+(cls?" "+cls:"")+'" id="'+id+'"><span class="ic">'+ic+'</span><span class="lb">'+esc(label)+'</span>'+(badge!==undefined && badge!=="" ? '<span class="bd'+(String(badge).indexOf("!")>=0?" warn":"")+'">'+esc(String(badge).replace("!",""))+'</span>' : '')+'</button>';
+    }
+    var html = '<div class="dhead"><div class="v">🐟 FV '+esc(String(s.vessel).toUpperCase())+'</div><div class="t">'+(trip ? esc(tripLabel(trip))+(trip.ended ? " · ended" : " · at sea") : "No trip at sea")+'</div></div>';
+    if(trip){
+      var tot = tripTotals(trip), signed = crewOnly(trip).filter(function(c){ return trip.contracts[c.id]; }).length;
+      html += '<div class="dsec">'+esc(tripLabel(trip))+'</div>'+
+        item("btnTripHome", "📍", "Stop log", tot.alb ? tot.alb+" LF" : "", cur==="trip")+
+        (trip.ended ? '' : item("btnDeparture", "⚓", "Departure check", trip.departure.doneAt ? "✓" : "!", false))+
+        item("btnCrew", "👥", "Crew list", personsOnBoard(trip)+(trip.crewConfirmedAt ? "" : " !"), cur==="crew")+
+        (crewOnly(trip).length ? item("btnContractsNav", "✍", "Contracts", signed+"/"+crewOnly(trip).length+(signed<crewOnly(trip).length?" !":""), cur==="contracts") : '')+
+        (baitLoaded(trip) && !trip.ended ? item("btnBaitNav", "🐟", "Bait received", baitBalance(trip)+" boxes", false) : '')+
+        item("btnTanks", "🧊", "Fish by tank", "", false)+
+        item("btnWeights", "⚖", "Weigh sheet", trip.weights.length || "", cur==="weights")+
+        item("btnReports", "📄", "Reports", "", cur==="reports")+
+        item("btnTripEdit", "✎", "Trip details", "", false)+
+        (trip.ended ? (trip.landing.fcoAt ? '' : item("btnLandingNav", "📣", "Landing notice", "!", false)) : item("btnEnd", "🏁", "End trip", "", false));
+    }
+    html += '<div class="dsec">Vessel</div>'+
+      item("btnAllTrips", "🗂", "All trips", state.trips.length, cur==="trips")+
+      item("btnDefects", "🔧", "Defects & maintenance", openDefects().length ? openDefects().length+" !" : "", cur==="defects")+
+      item("navKnownCrew", "👤", "Known crew", state.knownCrew.length, false)+
+      item("navDups", "🧹", "Remove duplicate crew", "", false)+
+      '<div class="dsec">Settings</div>'+
+      item("navSettings", "⚙", "Vessel & form details", "", false)+
+      item("navBackup", "💾", "Backup & restore", "", false);
+    var dr = document.getElementById("drawer");
+    dr.innerHTML = html;
+    function on(id, fn){ var b = document.getElementById(id); if(b) b.onclick = function(){ closeDrawer(); if(trip) view.tripId = trip.id; fn(); }; }
+    on("btnTripHome", function(){ go("trip", trip.id); });
+    on("btnDeparture", function(){ go("trip", trip.id); openDepartureSheet(trip); });
+    on("btnCrew", function(){ go("crew", trip.id); });
+    on("btnContractsNav", function(){ go("contracts", trip.id); });
+    on("btnBaitNav", function(){ go("trip", trip.id); openBaitReceivedSheet(trip); });
+    on("btnTanks", function(){ openTanksSheet(trip); });
+    on("btnWeights", function(){ go("weights", trip.id); });
+    on("btnReports", function(){ go("reports", trip.id); });
+    on("btnTripEdit", function(){ if(lockedGuard(trip)) return; openTripSheet(trip); });
+    on("btnEnd", function(){ go("trip", trip.id); openEndTripSheet(trip); });
+    on("btnLandingNav", function(){ go("trip", trip.id); openLandingSheet(trip); });
+    var all = document.getElementById("btnAllTrips"); if(all) all.onclick = function(){ closeDrawer(); go("trips", null); };
+    on("btnDefects", function(){ go("defects"); });
+    on("navKnownCrew", openKnownCrew);
+    on("navDups", function(){ openDuplicatesSheet(); });
+    on("navSettings", openSettings);
+    on("navBackup", openBackupSheet);
   }
+  function drawerOpen(){ return document.getElementById("drawerWrap").classList.contains("open"); }
+  function openDrawer(){ renderDrawer(); var w = document.getElementById("drawerWrap"); w.classList.add("open"); w.setAttribute("aria-hidden","false"); }
+  function closeDrawer(){ var w = document.getElementById("drawerWrap"); w.classList.remove("open"); w.setAttribute("aria-hidden","true"); }
   function openSettings(){
     var s = state.settings;
     var f = [["Vessel name","vessel"],["Vessel reg no. (DFFE form)","registrationNo"],["Rights holder","rightsHolder"],["Right application no.","rightNo"],["Permit no.","permitNo"],["Skipper","skipper"],["Skipper ID no.","skipperId"],["Skipper contact no.","contact"],["Email","email"],["Discharge port","port"],
@@ -2458,6 +2489,7 @@
 
   // ================= Back button, theme, start =================
   function handleBack(){
+    if(drawerOpen()){ closeDrawer(); return; }
     if(openSheets.length){ tryClose(openSheets[openSheets.length-1]); return; }
     if(view.screen==="contracts"){ go("crew"); return; }
     if(view.screen==="defects"){ go(view.tripId ? "trip" : "trips"); return; }
@@ -2478,8 +2510,8 @@
     try{ localStorage.setItem(STORAGE_KEY+"_theme", t); }catch(e){}
   }
   document.getElementById("btnTheme").onclick = function(){ applyTheme(document.documentElement.getAttribute("data-theme")==="sun" ? "dark" : "sun"); };
-  document.getElementById("btnMenu").onclick = openMenu;
-  document.getElementById("btnHome").onclick = function(){ go("trips", null); };
+  document.getElementById("btnDrawer").onclick = function(){ drawerOpen() ? closeDrawer() : openDrawer(); };
+  document.getElementById("drawerWrap").addEventListener("click", function(e){ if(e.target.id==="drawerWrap") closeDrawer(); });
   try{ applyTheme(localStorage.getItem(STORAGE_KEY+"_theme") || "dark"); }catch(e){}
   registerBack();
   // Open straight into the trip that's at sea.

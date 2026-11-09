@@ -5,7 +5,7 @@ import subprocess
 app = App(seed=fake_season())
 p = app.page
 # Raise two defects from the menu, alongside (no trip at sea)
-app.tap("#btnMenu"); app.tap('[data-a="defects"]')
+app.tap("#btnDefects")
 for area, title, prio in [("Engine room", "Port bilge pump not starting", "High"), ("Galley", "Stove igniter loose", "Low")]:
     app.tap("#btnNewDefect")
     app.tap('[data-chips="dcat"] [data-v="%s"]' % area)

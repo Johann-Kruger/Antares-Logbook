@@ -31,7 +31,7 @@ check(p.locator("#btnNext").count() == 0 and p.locator("#btnLogStop").is_visible
 check("40 boxes" in p.locator("#screen").inner_text(), "bait on board shown")
 
 # Bait received mid-trip
-app.tap("#btnBaitRecv"); p.fill("#bRecv", "5"); app.tap('.sheet [data-a="save"]')
+app.tap("#btnBaitNav"); p.fill("#bRecv", "5"); app.tap('.sheet [data-a="save"]')
 
 # Day: weather, two stops
 app.tap("#btnLogStop"); app.tap('[data-chips="wxWindDir"] [data-v="SE"]'); app.tap('.sheet [data-a="save"]')
@@ -53,7 +53,7 @@ ptxt = subprocess.run(["pdftotext", "-layout", pdf, "-"], capture_output=True, t
 check("DAILY REPORT" in ptxt and "69" in ptxt and "38 boxes" in ptxt, "day report PDF")
 app.tap('.sheet [data-a="done"]')
 today = datetime.date.today().isoformat()
-check(p.locator('[data-dayrep="%s"]' % today).count() == 1 and p.locator("#btnEndDay").count() == 0, "day marked ended")
+check(p.locator('[data-dayclosed="%s"]' % today).count() == 1 and p.locator("#btnEndDay").count() == 0, "day marked closed")
 trip = [t for t in app.stored()["trips"] if t["tripNumber"] == "30"][0]
 check([(e["type"], e["boxes"]) for e in trip["bait"]["entries"]] == [("load", "40"), ("received", "5"), ("used", "7")], "bait entries saved")
 
