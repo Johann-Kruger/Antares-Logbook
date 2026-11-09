@@ -58,7 +58,7 @@ class App:
 
     DRAWER_IDS = ("#btnTripHome", "#btnDeparture", "#btnCrew", "#btnContractsNav", "#btnBaitNav", "#btnTanks", "#btnWeights",
                   "#btnReports", "#btnTripEdit", "#btnEnd", "#btnLandingNav", "#btnAllTrips", "#btnDefects", "#navKnownCrew",
-                  "#navDups", "#navSettings", "#navBackup")
+                  "#navSettings", "#navBackup")
 
     def tap(self, sel):
         if sel in self.DRAWER_IDS:
