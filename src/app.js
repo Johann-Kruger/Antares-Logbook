@@ -393,9 +393,10 @@
   // onWait(seconds) is called every second while waiting.
   function captureGeo(onDone, onWait){
     if(!navigator.geolocation){ onDone("", "", "this device has no location support"); return; }
-    if(gps.denied){ gps.denied = false; }
-    gpsStart();
-    if(gpsGood(gps.fix, GPS_FRESH_MS)){ onDone(gps.fix.lat, gps.fix.lon, ""); return; }
+    gps.denied = false;
+    if(gpsGood(gps.fix, GPS_FRESH_MS)){ gpsStart(); onDone(gps.fix.lat, gps.fix.lon, ""); return; }
+    // No recent reading: restart the receiver so it reports afresh.
+    gpsStop(); gpsStart();
     var started = Date.now(), finished = false, tick, timer;
     function finish(lat, lon, note){ if(finished) return; finished = true; clearInterval(tick); clearTimeout(timer); onDone(lat, lon, note); }
     function check(){
