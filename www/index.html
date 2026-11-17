@@ -3272,14 +3272,20 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
       (loadProblem ? '<div class="locked-note" style="display:block;">The saved logbook could not be read'+(loadProblem.copyKey?" (a copy was kept on the phone)":"")+'. Restore your last backup file, or start empty.</div>' : '')+
       '<p class="sheet-text">'+esc(backupStatusText())+'\nThe backup file has crew ID numbers in it, so keep it out of group chats.</p>'+
       '<div class="sheet-actions"><button class="btn btn-accent" data-a="backup">Back up all data now</button>'+
-      '<button class="btn btn-ghost" data-a="restore">Restore from a backup file</button>'+
+      '<button class="btn btn-ghost" data-a="add">Add trips from a file</button>'+
+      '<button class="btn btn-ghost" data-a="restore">Restore from a backup file (replaces everything)</button>'+
       (loadProblem ? '<button class="btn btn-danger" data-a="fresh">Start with an empty logbook</button>' : '')+
       '<button class="btn btn-outline" data-a="close">Close</button></div><input type="file" id="restoreFile" accept=".json,application/json" class="hidden">';
     var sh = openSheet(html);
     sh.sheet.querySelector('[data-a="close"]').onclick = sh.close;
     sh.sheet.querySelector('[data-a="backup"]').onclick = function(){ sh.close(); exportBackup(); };
     var file = sh.sheet.querySelector("#restoreFile");
-    sh.sheet.querySelector('[data-a="restore"]').onclick = function(){ file.click(); };
+    var mode = "restore";
+    sh.sheet.querySelector('[data-a="restore"]').onclick = function(){ mode = "restore"; file.value = ""; file.click(); };
+    sh.sheet.querySelector('[data-a="add"]').onclick = function(){
+      if(storageLocked){ showToast("Restore or start empty first — the logbook on this phone couldn't be read", true); return; }
+      mode = "add"; file.value = ""; file.click();
+    };
     var fresh = sh.sheet.querySelector('[data-a="fresh"]');
     if(fresh) fresh.onclick = function(){ showConfirm("Start an empty logbook? The unreadable data stays copied on the phone.", "Start empty", "btn-danger", function(){ storageLocked = false; loadProblem = null; state = emptyState(); saveState(); sh.close(); go("trips", null); }); };
     file.onchange = function(){
@@ -3291,6 +3297,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
         var data = parsed && isPlainObject(parsed.data) ? parsed.data : parsed;
         if(!isPlainObject(data) || !Array.isArray(data.trips)){ showToast("That file isn't an Antares logbook backup", true); return; }
         var incoming = normaliseState(data);
+        if(mode==="add"){ addTripsFrom(incoming, sh); return; }
         var stops = incoming.trips.reduce(function(a,t){ return a+t.stops.length; }, 0);
         showConfirm("Replace everything on this phone with the backup?\n\n"+incoming.trips.length+" trips, "+stops+" stops.\nWhat's on the phone now is kept as a copy first.", "Restore", "btn-danger", function(){
           try{ var now = localStorage.getItem(STORAGE_KEY); if(now) keepCopyOf(now, "before_restore"); }catch(e){}
@@ -3300,6 +3307,37 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
       };
       r.readAsText(f);
     };
+  }
+
+  // A trip from a file counts as already on the phone when it has the same id, the same trip number,
+  // or (when either has no trip number) the same sailing date.
+  function sameTrip(a, b){
+    if(a.id===b.id) return true;
+    if(a.tripNumber && b.tripNumber) return String(a.tripNumber).trim()===String(b.tripNumber).trim();
+    return !!a.sailDate && a.sailDate===b.sailDate;
+  }
+  // Adds the file's trips that aren't on the phone yet. Nothing already on the phone is changed.
+  function addTripsFrom(incoming, sh){
+    var add = [], skip = [];
+    incoming.trips.forEach(function(t){ (state.trips.some(function(x){ return sameTrip(x, t); }) ? skip : add).push(t); });
+    if(!add.length){ showToast("All "+incoming.trips.length+" trips in that file are already on this phone"); return; }
+    var crewNew = incoming.knownCrew.filter(function(k){ return !state.knownCrew.some(function(x){ return x.id===k.id || crewMatch(x, k); }); });
+    var skNew = incoming.knownSkippers.filter(function(k){ return !state.knownSkippers.some(function(x){ return normName(x.name)===normName(k.name); }); });
+    function line(t){ var n = t.stops.reduce(function(a,st){ return a+num(st.alb); }, 0); return "• "+tripLabel(t)+" (sailed "+(fmtDate(t.sailDate)||"?")+"): "+t.stops.length+" stops, "+n+" longfin"+(t.weights.length?", "+t.weights.length+" weights":""); }
+    var msg = "Add "+add.length+" trip"+(add.length>1?"s":"")+" to this phone?\n\n"+add.map(line).join("\n")+
+      (skip.length ? "\n\nAlready on the phone, left as they are:\n"+skip.map(function(t){ return "• "+tripLabel(t)+" (sailed "+(fmtDate(t.sailDate)||"?")+")"; }).join("\n") : "")+
+      (crewNew.length ? "\n\n"+crewNew.length+" crew member"+(crewNew.length>1?"s":"")+" added to known crew." : "")+
+      "\n\nNothing already on the phone is changed.";
+    showConfirm(msg, "Add trips", "btn-accent", function(){
+      try{ var now = localStorage.getItem(STORAGE_KEY); if(now) keepCopyOf(now, "before_add_trips"); }catch(e){}
+      add.forEach(function(t){
+        if(state.trips.some(function(x){ return x.id===t.id; })) t.id = uid();
+        state.trips.push(t);
+      });
+      crewNew.forEach(function(k){ state.knownCrew.push(k); });
+      skNew.forEach(function(k){ state.knownSkippers.push(k); });
+      if(saveState()){ sh.close(); go("trips", null); showToast("Added "+add.length+" trip"+(add.length>1?"s":"")); }
+    });
   }
 
   // ================= Back button, theme, start =================
