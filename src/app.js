@@ -361,29 +361,67 @@
   function val(root, id){ var el = root.querySelector("#"+id); return el ? el.value.trim() : ""; }
 
   // ================= GPS =================
-  // Same two-step approach as Iingwane: a quick high-accuracy fix first,
-  // then a slower fallback. Works offline (satellites only).
-  function captureGeo(onDone){
-    if(!navigator.geolocation){ onDone("", "", "this phone has no location support"); return; }
-    function attempt(high, ms, cb){
-      var settled = false;
-      var timer = setTimeout(function(){ if(!settled){ settled = true; cb("", "", "timed out waiting for a GPS fix", false); } }, ms+500);
-      try{
-        navigator.geolocation.getCurrentPosition(function(pos){
-          if(settled) return; settled = true; clearTimeout(timer);
-          cb(pos.coords.latitude.toFixed(5), pos.coords.longitude.toFixed(5), "", false);
-        }, function(err){
-          if(settled) return; settled = true; clearTimeout(timer);
-          var denied = err && err.code===1;
-          cb("", "", denied ? "location permission denied — allow location for the app in phone settings" : "no GPS fix yet", denied);
-        }, { enableHighAccuracy:high, timeout:ms, maximumAge:0 });
-      }catch(e){ if(!settled){ settled = true; clearTimeout(timer); cb("", "", "location request failed", false); } }
-    }
-    attempt(true, 10000, function(lat, lon, reason, denied){
-      if(lat || denied){ onDone(lat, lon, reason); return; }
-      attempt(false, 15000, onDone);
-    });
+  // At sea there is no cell or Wi-Fi to help, so the first satellite fix can
+  // take a minute or more. Keep the GPS running while a trip is open and the
+  // app is on screen, so each stop gets a fresh fix straight away, and wait
+  // up to two minutes when there isn't one yet.
+  var GPS_FRESH_MS = 30000, GPS_WAIT_MS = 120000, GPS_STALE_MS = 10*60000, GPS_GOOD_M = 200;
+  var gps = { watch:null, fix:null, denied:false, waiters:[], retry:null };
+  function gpsNotify(){ var w = gps.waiters; gps.waiters = []; w.forEach(function(f){ f(); }); }
+  function gpsStart(){
+    if(!navigator.geolocation || gps.watch!==null) return;
+    clearTimeout(gps.retry); gps.retry = null;
+    try{
+      gps.watch = navigator.geolocation.watchPosition(function(pos){
+        gps.denied = false;
+        gps.fix = { lat:pos.coords.latitude.toFixed(5), lon:pos.coords.longitude.toFixed(5), acc:Math.round(pos.coords.accuracy||0), at:Date.now() };
+        gpsNotify();
+      }, function(err){
+        if(err && err.code===1){ gps.denied = true; gpsStop(); gpsNotify(); return; }
+        // No fix yet or timed out: keep the receiver searching.
+        gpsStop(); gps.retry = setTimeout(gpsStart, 3000);
+      }, { enableHighAccuracy:true, maximumAge:0 });
+    }catch(e){ gps.watch = null; }
   }
+  function gpsStop(){
+    clearTimeout(gps.retry); gps.retry = null;
+    if(gps.watch!==null){ try{ navigator.geolocation.clearWatch(gps.watch); }catch(e){} gps.watch = null; }
+  }
+  function gpsGood(f, maxAge){ return f && Date.now()-f.at < maxAge && f.acc <= GPS_GOOD_M; }
+  function minsAgo(t){ var m = Math.round((Date.now()-t)/60000); return m<1 ? "under a minute" : m+" min"; }
+  // onDone(lat, lon, note): note says what's wrong when lat is "", or qualifies an older or rough fix.
+  // onWait(seconds) is called every second while waiting.
+  function captureGeo(onDone, onWait){
+    if(!navigator.geolocation){ onDone("", "", "this device has no location support"); return; }
+    if(gps.denied){ gps.denied = false; }
+    gpsStart();
+    if(gpsGood(gps.fix, GPS_FRESH_MS)){ onDone(gps.fix.lat, gps.fix.lon, ""); return; }
+    var started = Date.now(), finished = false, tick, timer;
+    function finish(lat, lon, note){ if(finished) return; finished = true; clearInterval(tick); clearTimeout(timer); onDone(lat, lon, note); }
+    function check(){
+      if(finished) return;
+      if(gps.denied){ finish("", "", "location permission denied — allow Location for Antares Logbook in the tablet's settings, with Precise location on"); return; }
+      if(gpsGood(gps.fix, GPS_FRESH_MS) && gps.fix.at >= started - GPS_FRESH_MS){ finish(gps.fix.lat, gps.fix.lon, ""); return; }
+      gps.waiters.push(check);
+    }
+    tick = setInterval(function(){ if(onWait) onWait(Math.round((Date.now()-started)/1000)); }, 1000);
+    timer = setTimeout(function(){
+      var f = gps.fix;
+      if(f && Date.now()-f.at < GPS_STALE_MS){
+        if(f.acc > GPS_GOOD_M) finish(f.lat, f.lon, "rough position (±"+(f.acc>=1000 ? (f.acc/1000).toFixed(1)+" km" : f.acc+" m")+") — check Precise location is on for the app");
+        else finish(f.lat, f.lon, "last fix "+minsAgo(f.at)+" old — no new fix in 2 min");
+        return;
+      }
+      finish("", "", "no GPS fix after 2 min — the tablet needs a clear view of the sky (not under the steel wheelhouse roof); check Location and Precise location are on");
+    }, GPS_WAIT_MS);
+    check();
+  }
+  // Run the GPS while there's an open trip and the app is on screen.
+  function gpsKeepWarm(){
+    var open = state && state.trips && state.trips.some(function(t){ return !t.ended; });
+    if(open && document.visibilityState !== "hidden") gpsStart(); else gpsStop();
+  }
+  document.addEventListener("visibilitychange", gpsKeepWarm);
 
   // ================= Files out =================
   function isNativeApp(){ return !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform()); }
@@ -441,6 +479,7 @@
     else if(view.screen==="contracts") renderContracts(trip);
     else if(view.screen==="defects") renderDefects(trip);
     else if(view.screen==="reports") renderReports(trip);
+    gpsKeepWarm();
   }
   function setTopbar(title, sub){
     document.getElementById("tbTitle").textContent = title;
@@ -1108,9 +1147,13 @@
       showGps("wait");
       captureGeo(function(la, lo, reason){
         if(!root.isConnected) return;
-        if(la){ lat = la; lon = lo; gpsNote = ""; fillManual(); }
-        else gpsNote = reason;
+        if(la){ lat = la; lon = lo; fillManual(); }
+        gpsNote = reason;
         showGps();
+      }, function(sec){
+        if(!root.isConnected) return;
+        var t = root.querySelector("#gpsText");
+        if(t && root.querySelector("#gpsBox.wait")) t.innerHTML = "Waiting for satellites… "+sec+" s<small>can take a minute or two at sea — carry on entering fish</small>";
       });
     }
     function fillManual(){
